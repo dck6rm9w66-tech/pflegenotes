@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<title>Schichtprotokoll</title>
+<meta name="description" content="Schnelles Dokumentationstool für die Pflege – Situationen, Beteiligte, Kalender und Schichtfotos.">
+<meta name="theme-color" content="#0F5C56">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🩺</text></svg>">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+
+  <header class="app-header">
+    <div class="app-header__title">
+      <span class="app-header__logo" aria-hidden="true">🩺</span>
+      <h1>Schichtprotokoll</h1>
+    </div>
+    <button id="themeToggle" class="icon-btn" type="button" aria-label="Darstellung wechseln">◐</button>
+  </header>
+
+  <main id="views">
+
+    <!-- START / SCHNELLERFASSUNG -->
+    <section id="view-start" class="view" data-view="start">
+
+      <div class="shift-bar">
+        <button id="shiftTypeBtn" class="shift-pill" type="button" aria-label="Schicht ändern">
+          <span id="shiftDateLabel">–</span>
+          <span class="shift-pill__sep">·</span>
+          <span id="shiftTypeLabel">Frühdienst</span>
+        </button>
+        <button id="shiftPhotoBtn" class="icon-btn icon-btn--surface" type="button" aria-label="Foto Zuteilungsplan für diese Schicht">📷</button>
+      </div>
+
+      <form id="entryForm" class="entry-form">
+        <label for="entryText" class="visually-hidden">Situation kurz beschreiben</label>
+        <textarea id="entryText" class="entry-textarea" placeholder="Was ist passiert? Kurz notieren …" rows="4"></textarea>
+
+        <button type="button" id="timeStampBtn" class="timestamp-btn">
+          <span id="timestampLabel">Jetzt</span>
+          <span class="timestamp-btn__edit">Zeit ändern</span>
+        </button>
+
+        <div class="involved">
+          <div class="involved__label">Beteiligt</div>
+          <div id="personChips" class="chip-row"></div>
+        </div>
+
+        <div class="involved">
+          <div class="involved__label">Hashtags</div>
+          <div id="hashtagChips" class="chip-row"></div>
+        </div>
+
+        <div class="save-bar">
+          <button type="submit" class="btn btn--primary btn--block">Eintrag speichern</button>
+        </div>
+      </form>
+    </section>
+
+    <!-- LOG -->
+    <section id="view-log" class="view" data-view="log" hidden>
+      <div class="search-bar">
+        <input type="search" id="logSearch" placeholder="Log durchsuchen …" aria-label="Log durchsuchen" enterkeyhint="search">
+      </div>
+      <div id="logList" class="entry-list"></div>
+      <p id="logEmpty" class="empty-state" hidden>Noch keine Einträge. Dein erster Eintrag erscheint hier, sobald du ihn unter „Neu“ speicherst.</p>
+    </section>
+
+    <!-- KALENDER -->
+    <section id="view-kalender" class="view" data-view="kalender" hidden>
+      <div class="cal-header">
+        <button id="calPrev" class="icon-btn" type="button" aria-label="Vorheriger Monat">‹</button>
+        <div id="calMonthLabel" class="cal-header__label">–</div>
+        <button id="calNext" class="icon-btn" type="button" aria-label="Nächster Monat">›</button>
+      </div>
+      <div class="cal-weekdays" aria-hidden="true">
+        <span>Mo</span><span>Di</span><span>Mi</span><span>Do</span><span>Fr</span><span>Sa</span><span>So</span>
+      </div>
+      <div id="calGrid" class="cal-grid"></div>
+
+      <button id="calFilterToggle" class="filter-toggle" type="button" aria-expanded="false">
+        Filter <span id="calFilterCount" class="filter-toggle__count" hidden>0</span>
+      </button>
+      <div id="calFilterPanel" class="filter-panel" hidden>
+        <div class="filter-panel__group">
+          <div class="filter-panel__label">Kategorie</div>
+          <div id="filterCategories" class="chip-row"></div>
+        </div>
+        <div class="filter-panel__group">
+          <div class="filter-panel__label">Person</div>
+          <div id="filterPeople" class="chip-row"></div>
+        </div>
+        <div class="filter-panel__group">
+          <div class="filter-panel__label">Hashtag</div>
+          <div id="filterHashtags" class="chip-row"></div>
+        </div>
+        <button id="filterReset" class="btn btn--ghost btn--small" type="button">Filter zurücksetzen</button>
+      </div>
+
+      <div class="cal-list-header">
+        <span id="calListLabel">Alle Ereignisse</span>
+        <button id="calDayClear" class="link-btn" type="button" hidden>Tag abwählen</button>
+      </div>
+      <div id="calList" class="entry-list"></div>
+      <p id="calEmpty" class="empty-state" hidden>Keine Ereignisse für diese Auswahl.</p>
+    </section>
+
+    <!-- KONTAKTE -->
+    <section id="view-kontakte" class="view" data-view="kontakte" hidden>
+      <div id="categoryList" class="category-list"></div>
+      <div class="kontakte-actions">
+        <button id="addPersonBtn" class="btn btn--primary btn--block" type="button">+ Person hinzufügen</button>
+        <button id="addCategoryBtn" class="btn btn--ghost btn--block" type="button">+ Eigene Kategorie</button>
+      </div>
+    </section>
+
+    <!-- MEHR -->
+    <section id="view-mehr" class="view" data-view="mehr" hidden>
+      <section class="settings-section">
+        <h2>Schichtfotos</h2>
+        <p class="settings-hint">Foto des Zuteilungsplans pro Schicht hinterlegen – schnell wieder auffindbar.</p>
+        <div id="shiftPhotoList" class="shift-photo-list"></div>
+        <button id="addShiftPhotoBtn" class="btn btn--ghost btn--block" type="button">+ Schicht-Foto hinzufügen</button>
+      </section>
+
+      <section class="settings-section">
+        <h2>Darstellung</h2>
+        <div id="themeOptions" class="segmented" role="radiogroup" aria-label="Darstellung"></div>
+      </section>
+
+      <section class="settings-section">
+        <h2>Hilfe</h2>
+        <button id="showOnboardingBtn" class="btn btn--ghost btn--block" type="button">Einführung erneut anzeigen</button>
+      </section>
+
+      <section class="settings-section">
+        <h2>Daten</h2>
+        <button id="exportBtn" class="btn btn--ghost btn--block" type="button">Daten exportieren (JSON)</button>
+        <button id="exportWordBtn" class="btn btn--ghost btn--block" type="button">Protokoll als Word exportieren (.docx)</button>
+        <p class="settings-hint">Der Word-Export enthält alle Log-Einträge sowie die hinterlegten Schicht-Fotos.</p>
+        <label class="btn btn--ghost btn--block" for="importInput">Daten importieren (JSON)</label>
+        <input type="file" id="importInput" accept="application/json" hidden>
+        <p class="settings-hint">Alle Daten bleiben ausschliesslich lokal auf diesem Gerät gespeichert – nichts wird übertragen. Für ein Backup regelmässig exportieren. Bitte auf Datenschutz achten: keine vollständigen Patientendaten im Klartext erfassen.</p>
+      </section>
+
+      <section class="settings-section settings-section--danger">
+        <h2>Daten löschen</h2>
+        <button id="clearAllBtn" class="btn btn--danger btn--block" type="button">Alle Daten unwiderruflich löschen</button>
+      </section>
+    </section>
+
+  </main>
+
+  <nav class="bottom-nav" aria-label="Hauptnavigation">
+    <button class="nav-btn is-active" data-nav="start" type="button">
+      <span class="nav-btn__icon" aria-hidden="true">✎</span><span>Neu</span>
+    </button>
+    <button class="nav-btn" data-nav="log" type="button">
+      <span class="nav-btn__icon" aria-hidden="true">☰</span><span>Log</span>
+    </button>
+    <button class="nav-btn" data-nav="kalender" type="button">
+      <span class="nav-btn__icon" aria-hidden="true">▦</span><span>Kalender</span>
+    </button>
+    <button class="nav-btn" data-nav="kontakte" type="button">
+      <span class="nav-btn__icon" aria-hidden="true">◍</span><span>Kontakte</span>
+    </button>
+    <button class="nav-btn" data-nav="mehr" type="button">
+      <span class="nav-btn__icon" aria-hidden="true">•••</span><span>Mehr</span>
+    </button>
+  </nav>
+
+  <div id="toast" class="toast" hidden></div>
+  <div id="modalRoot"></div>
+  <div id="onboardingRoot"></div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
