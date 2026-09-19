@@ -138,10 +138,12 @@
       <section class="settings-section">
         <h2>Daten</h2>
         <button id="exportBtn" class="btn btn--ghost btn--block" type="button">Daten exportieren (JSON)</button>
+        <p class="settings-hint">Erstellt zwei Dateien: das JSON (Einträge, Kontakte, Kalender) sowie, falls Schicht-Fotos vorhanden sind, ein separates ZIP mit den Fotos.</p>
         <button id="exportWordBtn" class="btn btn--ghost btn--block" type="button">Protokoll als Word exportieren (.docx)</button>
-        <p class="settings-hint">Der Word-Export enthält alle Log-Einträge sowie die hinterlegten Schicht-Fotos.</p>
+        <p class="settings-hint">Der Word-Export enthält alle Log-Einträge sowie die hinterlegten Schicht-Fotos in einem lesbaren Dokument.</p>
         <label class="btn btn--ghost btn--block" for="importInput">Daten importieren (JSON)</label>
         <input type="file" id="importInput" accept="application/json" hidden>
+        <p class="settings-hint">Enthält die Datei Foto-Verweise, wirst du im Anschluss gezielt nach dem passenden Fotos-ZIP gefragt.</p>
         <p class="settings-hint">Alle Daten bleiben ausschliesslich lokal auf diesem Gerät gespeichert – nichts wird übertragen. Für ein Backup regelmässig exportieren. Bitte auf Datenschutz achten: keine vollständigen Patientendaten im Klartext erfassen.</p>
       </section>
 

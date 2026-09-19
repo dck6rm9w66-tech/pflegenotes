@@ -52,10 +52,48 @@
   function persist() {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      checkStorageSize();
     } catch (e) {
       console.error("Fehler beim Speichern:", e);
       toast("Speichern fehlgeschlagen – Speicher evtl. voll.");
+      showStorageWarningModal(true);
     }
+  }
+
+  // Grobe Näherung: Zeichenlänge des serialisierten States als Proxy für die
+  // tatsächliche Speichernutzung. Reicht als früher Hinweis, bevor der
+  // Browser-Speicher (typischerweise 5–10 MB je Ursprung) wirklich voll ist –
+  // meist verursacht durch viele Schicht-Fotos.
+  var STORAGE_WARN_THRESHOLD = 4 * 1024 * 1024;
+  var storageWarningShownThisSession = false;
+
+  function checkStorageSize() {
+    try {
+      var size = JSON.stringify(state).length;
+      if (size > STORAGE_WARN_THRESHOLD && !storageWarningShownThisSession) {
+        storageWarningShownThisSession = true;
+        showStorageWarningModal(false);
+      }
+    } catch (e) { /* ignore */ }
+  }
+
+  function showStorageWarningModal(isCriticalFailure) {
+    var title = isCriticalFailure ? "Speicher voll" : "Speicherplatz wird knapp";
+    var message = isCriticalFailure
+      ? "Deine letzte Änderung konnte nicht gespeichert werden – der lokale Speicher dieses Browsers ist voll (oft durch viele Schicht-Fotos). Sichere deine Daten jetzt per Export und lösche danach ggf. ältere Schicht-Fotos."
+      : "Der lokale Speicher dieses Browsers wird durch deine Einträge und Schicht-Fotos langsam knapp. Sichere deine Daten am besten jetzt per Export, bevor Speicherplatz-Probleme auftreten.";
+
+    var sheet = openModal(title, '' +
+      '<p class="modal-text">' + esc(message) + '</p>' +
+      '<div class="modal-actions">' +
+        '<button type="button" class="btn btn--ghost" data-close-modal>Später</button>' +
+        '<button type="button" class="btn btn--primary" id="storageWarnExportBtn">Jetzt exportieren (JSON + Fotos-ZIP)</button>' +
+      '</div>');
+
+    sheet.querySelector("#storageWarnExportBtn").addEventListener("click", function () {
+      closeModal();
+      exportData();
+    });
   }
 
   /* ---------------------------------------------------------------------
@@ -525,24 +563,26 @@
       '<div class="modal-actions"><button type="button" class="btn btn--ghost" data-close-modal>Abbrechen</button>' +
       '<button type="button" class="btn btn--primary" id="shiftSaveBtn">Übernehmen</button></div>');
 
-    var selectedType = ui.shift.type;
     sheet.querySelectorAll("[data-shift-type]").forEach(function (chip) {
       chip.addEventListener("click", function () {
-        selectedType = chip.dataset.shiftType;
         sheet.querySelectorAll("[data-shift-type]").forEach(function (c) { c.classList.toggle("is-selected", c === chip); });
         sheet.querySelector("#shiftCustomInput").value = "";
       });
     });
     sheet.querySelector("#shiftCustomInput").addEventListener("input", function (e) {
       if (e.target.value.trim()) {
-        selectedType = e.target.value.trim();
         sheet.querySelectorAll("[data-shift-type]").forEach(function (c) { c.classList.remove("is-selected"); });
       }
     });
     sheet.querySelector("#shiftSaveBtn").addEventListener("click", function () {
+      // Bewusst alles frisch aus dem DOM lesen (kein separat mitgeführter
+      // "selectedType"-Zwischenspeicher mehr): der wurde beim Leeren des
+      // Freitextfelds nicht zurückgesetzt, wodurch der zuvor getippte Text
+      // trotzdem übernommen wurde.
       var customText = sheet.querySelector("#shiftCustomInput").value.trim();
+      var activeChip = sheet.querySelector("[data-shift-type].is-selected");
       ui.shift.date = sheet.querySelector("#shiftDateInput").value || todayKey();
-      ui.shift.type = customText || selectedType || "Früh";
+      ui.shift.type = customText || (activeChip ? activeChip.dataset.shiftType : "") || "Früh";
       state.settings.lastShiftType = ui.shift.type;
       persist();
       renderShiftBar();
@@ -596,6 +636,10 @@
       var tagsHTML = (entry.hashtags || []).map(function (t) {
         return '<span class="mini-tag">#' + esc(t) + '</span>';
       }).join("");
+      var linkedShift = entry.shiftPhotoId ? state.shifts.filter(function (s) { return s.id === entry.shiftPhotoId; })[0] : null;
+      var photoLinkHTML = (linkedShift && linkedShift.photo)
+        ? '<button type="button" class="link-btn entry-photo-link" data-view-shift-photo="' + linkedShift.id + '">📷 Zuteilungsplan ansehen</button>'
+        : '';
       html +=
         '<div class="entry-item" data-entry="' + entry.id + '">' +
           '<div class="entry-item__row" style="' + (accent ? "--entry-color:" + accent : "") + '" data-toggle="' + entry.id + '">' +
@@ -604,6 +648,7 @@
               '<div class="entry-item__text">' + esc(entry.text) + '</div>' +
               (peopleHTML ? '<div class="entry-item__people">' + peopleHTML + '</div>' : '') +
               (tagsHTML ? '<div class="entry-item__tags">' + tagsHTML + '</div>' : '') +
+              photoLinkHTML +
             '</div>' +
           '</div>' +
           '<div class="entry-item__detail">' +
@@ -621,6 +666,13 @@
     container.querySelectorAll("[data-toggle]").forEach(function (row) {
       row.addEventListener("click", function () {
         row.closest(".entry-item").classList.toggle("is-open");
+      });
+    });
+    container.querySelectorAll("[data-view-shift-photo]").forEach(function (btn) {
+      btn.addEventListener("click", function (e) {
+        e.stopPropagation();
+        var shift = state.shifts.filter(function (s) { return s.id === btn.dataset.viewShiftPhoto; })[0];
+        if (shift) openShiftPhotoModal({ date: shift.date, type: shift.type });
       });
     });
     container.querySelectorAll("[data-edit]").forEach(function (btn) {
@@ -1076,6 +1128,35 @@
     return state.shifts.filter(function (s) { return s.date === date && s.type === type; })[0] || null;
   }
 
+  // Verknüpft ein Schicht-Foto automatisch mit einem Log-Eintrag von diesem Tag:
+  // existiert schon ein Eintrag, der auf diese Schicht verweist, passiert nichts
+  // (verhindert Duplikate bei jedem erneuten Speichern/Bearbeiten). Sonst wird
+  // ein kurzer, automatischer Eintrag angelegt, der die Schichtleitung (falls
+  // vorhanden) direkt als beteiligte Person übernimmt.
+  function ensureEntryLinkedToShift(shift) {
+    var alreadyLinked = state.entries.some(function (e) { return e.shiftPhotoId === shift.id; });
+    if (alreadyLinked) return;
+
+    var text = "📷 Foto des Zuteilungsplans hinzugefügt";
+    if (shift.station) text += " – " + shift.station;
+    text += ".";
+
+    var d = new Date();
+    var parts = shift.date.split("-").map(Number);
+    d.setFullYear(parts[0], parts[1] - 1, parts[2]);
+
+    state.entries.push({
+      id: uid("entry"),
+      timestamp: d.toISOString(),
+      text: text,
+      personIds: shift.leitungId ? [shift.leitungId] : [],
+      hashtags: extractHashtags(text),
+      shiftDate: shift.date,
+      shiftType: shift.type,
+      shiftPhotoId: shift.id
+    });
+  }
+
   // Für Dateinamen: Sonderzeichen/Leerzeichen entfernen bzw. durch "-" ersetzen,
   // Umlaute bleiben erhalten (auf modernen Systemen unproblematisch).
   function slugifyForFilename(s) {
@@ -1213,11 +1294,17 @@
         target.station = station;
         target.leitungId = leitungId;
       } else {
-        state.shifts.push({ id: uid("shift"), date: date, type: type, photo: pendingPhoto, note: "", station: station, leitungId: leitungId });
+        target = { id: uid("shift"), date: date, type: type, photo: pendingPhoto, note: "", station: station, leitungId: leitungId };
+        state.shifts.push(target);
       }
+      ensureEntryLinkedToShift(target);
       persist();
       closeModal();
       renderMehr();
+      renderLog();
+      renderCalendar();
+      renderPersonChips();
+      renderHashtagSuggestions();
       toast("Schicht-Foto gespeichert");
     });
 
@@ -1377,6 +1464,53 @@
     return concatBytes(localParts.concat([centralDirBytes, eocd]));
   }
 
+  // Liest ein ZIP-Archiv (ArrayBuffer) und gibt seine Dateien zurück.
+  // Unterstützt bewusst nur die Speichermethode "store" (unkomprimiert) –
+  // genau das, was buildZip() oben erzeugt. Eine Datei mit "echter"
+  // Komprimierung (z. B. neu gepackt von einem normalen Zip-Tool) wird
+  // erkannt und als "unsupported" markiert statt falsche Daten zu liefern.
+  function readZipEntries(arrayBuffer) {
+    var view = new DataView(arrayBuffer);
+    var bytes = new Uint8Array(arrayBuffer);
+
+    var eocdOffset = -1;
+    for (var i = bytes.length - 22; i >= 0; i--) {
+      if (view.getUint32(i, true) === 0x06054b50) { eocdOffset = i; break; }
+    }
+    if (eocdOffset === -1) throw new Error("Keine gültige ZIP-Datei gefunden.");
+
+    var totalEntries = view.getUint16(eocdOffset + 10, true);
+    var centralDirOffset = view.getUint32(eocdOffset + 16, true);
+
+    var entries = [];
+    var offset = centralDirOffset;
+    for (var e = 0; e < totalEntries; e++) {
+      var sig = view.getUint32(offset, true);
+      if (sig !== 0x02014b50) throw new Error("ZIP-Datei ist beschädigt oder hat ein unerwartetes Format.");
+      var compressionMethod = view.getUint16(offset + 10, true);
+      var uncompressedSize = view.getUint32(offset + 24, true);
+      var nameLen = view.getUint16(offset + 28, true);
+      var extraLen = view.getUint16(offset + 30, true);
+      var commentLen = view.getUint16(offset + 32, true);
+      var localHeaderOffset = view.getUint32(offset + 42, true);
+      var name = new TextDecoder().decode(bytes.slice(offset + 46, offset + 46 + nameLen));
+
+      var lSig = view.getUint32(localHeaderOffset, true);
+      if (lSig !== 0x04034b50) throw new Error("ZIP-Datei ist beschädigt (ungültiger Dateikopf).");
+      var lNameLen = view.getUint16(localHeaderOffset + 26, true);
+      var lExtraLen = view.getUint16(localHeaderOffset + 28, true);
+      var dataStart = localHeaderOffset + 30 + lNameLen + lExtraLen;
+
+      if (compressionMethod !== 0) {
+        entries.push({ name: name, unsupported: true });
+      } else {
+        entries.push({ name: name, data: bytes.slice(dataStart, dataStart + uncompressedSize) });
+      }
+      offset += 46 + nameLen + extraLen + commentLen;
+    }
+    return entries;
+  }
+
   function base64ToBytes(base64) {
     var binary = atob(base64);
     var bytes = new Uint8Array(binary.length);
@@ -1384,6 +1518,11 @@
     return bytes;
   }
   function dataUrlToBytes(dataUrl) { return base64ToBytes(dataUrl.split(",")[1]); }
+  function bytesToDataUrl(bytes, mime) {
+    var binary = "";
+    for (var i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+    return "data:" + mime + ";base64," + btoa(binary);
+  }
 
   function getImageNaturalSize(dataUrl) {
     return new Promise(function (resolve) {
@@ -1415,10 +1554,17 @@
     }).join('<w:r><w:br/></w:r>');
   }
 
-  function wEntryXml(entry) {
+  // ---- Log als Tabelle pro Tag (Zeit | Ereignis) — wirkt deutlich
+  // professioneller/berichtsartiger als lose Absätze. ----
+  var WTABLE_COL_TIME = 1250;
+  var WTABLE_COL_TEXT = 8388; // Summe = 9638 twips = Satzspiegelbreite bei A4/2cm Rand
+
+  function wTableRowXml(entry) {
     var d = new Date(entry.timestamp);
-    var timeRun = '<w:r><w:rPr><w:b/></w:rPr><w:t xml:space="preserve">' + xmlEsc(formatTime(d)) + '  </w:t></w:r>';
-    var mainPara = '<w:p><w:pPr><w:spacing w:before="120" w:after="40"/></w:pPr>' + timeRun + wTextRunsXml(entry.text) + '</w:p>';
+    var timeCell = '<w:tc><w:tcPr><w:tcW w:w="' + WTABLE_COL_TIME + '" w:type="dxa"/><w:vAlign w:val="top"/></w:tcPr>' +
+      '<w:p><w:pPr><w:spacing w:before="60" w:after="60"/></w:pPr><w:r><w:rPr><w:b/></w:rPr><w:t xml:space="preserve">' + xmlEsc(formatTime(d)) + '</w:t></w:r></w:p></w:tc>';
+
+    var textPara = '<w:p><w:pPr><w:spacing w:before="60" w:after="40"/></w:pPr>' + wTextRunsXml(entry.text) + '</w:p>';
 
     var names = (entry.personIds || []).map(function (pid) {
       var p = getPerson(pid);
@@ -1426,17 +1572,46 @@
       var cat = getCategory(p.categoryId);
       return p.name + (cat ? " (" + cat.name + ")" : "");
     }).filter(function (x) { return x; });
+    var peoplePara = names.length
+      ? '<w:p><w:pPr><w:spacing w:after="20"/></w:pPr><w:r><w:rPr><w:i/><w:color w:val="666666"/><w:sz w:val="18"/></w:rPr>' +
+        '<w:t xml:space="preserve">Beteiligt: ' + xmlEsc(names.join(", ")) + '</w:t></w:r></w:p>'
+      : '';
 
-    var peoplePara = "";
-    if (names.length) {
-      peoplePara = '<w:p><w:pPr><w:spacing w:after="160"/></w:pPr><w:r><w:rPr><w:i/><w:color w:val="666666"/><w:sz w:val="18"/></w:rPr>' +
-        '<w:t xml:space="preserve">Beteiligt: ' + xmlEsc(names.join(", ")) + '</w:t></w:r></w:p>';
-    }
-    return mainPara + peoplePara;
+    var tags = entry.hashtags || [];
+    var tagsPara = tags.length
+      ? '<w:p><w:pPr><w:spacing w:after="60"/></w:pPr><w:r><w:rPr><w:color w:val="0F5C56"/><w:sz w:val="17"/></w:rPr>' +
+        '<w:t xml:space="preserve">' + xmlEsc(tags.map(function (t) { return "#" + t; }).join("   ")) + '</w:t></w:r></w:p>'
+      : '';
+
+    var textCell = '<w:tc><w:tcPr><w:tcW w:w="' + WTABLE_COL_TEXT + '" w:type="dxa"/></w:tcPr>' + textPara + peoplePara + tagsPara + '</w:tc>';
+    return '<w:tr>' + timeCell + textCell + '</w:tr>';
   }
 
+  function wTableBorderXml() {
+    return '<w:tblBorders>' +
+      '<w:top w:val="single" w:sz="4" w:color="DDE4E1"/><w:left w:val="single" w:sz="4" w:color="DDE4E1"/>' +
+      '<w:bottom w:val="single" w:sz="4" w:color="DDE4E1"/><w:right w:val="single" w:sz="4" w:color="DDE4E1"/>' +
+      '<w:insideH w:val="single" w:sz="4" w:color="DDE4E1"/><w:insideV w:val="single" w:sz="4" w:color="DDE4E1"/>' +
+    '</w:tblBorders>';
+  }
+
+  function wDayTableXml(dayEntries) {
+    var header = '<w:tr><w:trPr><w:tblHeader/></w:trPr>' +
+      '<w:tc><w:tcPr><w:tcW w:w="' + WTABLE_COL_TIME + '" w:type="dxa"/><w:shd w:val="clear" w:color="auto" w:fill="0F5C56"/></w:tcPr>' +
+        '<w:p><w:pPr><w:spacing w:before="40" w:after="40"/></w:pPr><w:r><w:rPr><w:b/><w:color w:val="FFFFFF"/><w:sz w:val="18"/></w:rPr><w:t>Zeit</w:t></w:r></w:p></w:tc>' +
+      '<w:tc><w:tcPr><w:tcW w:w="' + WTABLE_COL_TEXT + '" w:type="dxa"/><w:shd w:val="clear" w:color="auto" w:fill="0F5C56"/></w:tcPr>' +
+        '<w:p><w:pPr><w:spacing w:before="40" w:after="40"/></w:pPr><w:r><w:rPr><w:b/><w:color w:val="FFFFFF"/><w:sz w:val="18"/></w:rPr><w:t>Ereignis</w:t></w:r></w:p></w:tc>' +
+    '</w:tr>';
+    var rows = dayEntries.map(wTableRowXml).join("");
+    return '<w:tbl><w:tblPr><w:tblW w:w="0" w:type="auto"/>' + wTableBorderXml() + '<w:tblLayout w:type="fixed"/></w:tblPr>' +
+      '<w:tblGrid><w:gridCol w:w="' + WTABLE_COL_TIME + '"/><w:gridCol w:w="' + WTABLE_COL_TEXT + '"/></w:tblGrid>' +
+      header + rows + '</w:tbl>' +
+      '<w:p><w:pPr><w:spacing w:after="220"/></w:pPr></w:p>';
+  }
+
+  // ---- Schicht-Fotos: gerahmtes Bild mit Bildunterschrift darunter ----
   function wImageXml(img) {
-    return '<w:p><w:pPr><w:spacing w:after="240"/></w:pPr><w:r><w:drawing>' +
+    return '<w:p><w:pPr><w:spacing w:after="80"/></w:pPr><w:r><w:drawing>' +
       '<wp:inline distT="0" distB="0" distL="0" distR="0">' +
         '<wp:extent cx="' + img.emuW + '" cy="' + img.emuH + '"/>' +
         '<wp:docPr id="' + img.docPrId + '" name="Bild' + img.docPrId + '"/>' +
@@ -1446,31 +1621,48 @@
             '<pic:nvPicPr><pic:cNvPr id="' + img.docPrId + '" name="Bild' + img.docPrId + '"/><pic:cNvPicPr/></pic:nvPicPr>' +
             '<pic:blipFill><a:blip r:embed="' + img.relId + '"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>' +
             '<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="' + img.emuW + '" cy="' + img.emuH + '"/></a:xfrm>' +
-              '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr>' +
+              '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>' +
+              '<a:ln w="9525"><a:solidFill><a:srgbClr val="C9D2CF"/></a:solidFill></a:ln>' +
+            '</pic:spPr>' +
           '</pic:pic>' +
         '</a:graphicData></a:graphic>' +
       '</wp:inline>' +
     '</w:drawing></w:r></w:p>';
   }
 
+  function wCaptionXml(text) {
+    return '<w:p><w:pPr><w:spacing w:after="300"/></w:pPr><w:r><w:rPr><w:i/><w:color w:val="666666"/><w:sz w:val="18"/></w:rPr>' +
+      '<w:t xml:space="preserve">' + xmlEsc(text) + '</w:t></w:r></w:p>';
+  }
+
   function buildWordBodyXml(imageRelMap) {
     var body = "";
     body += wHeadingXml("Schichtprotokoll", 1);
+    body += '<w:p><w:pPr><w:spacing w:after="60"/></w:pPr><w:r><w:rPr><w:color w:val="5B6864"/><w:sz w:val="20"/></w:rPr>' +
+      '<w:t xml:space="preserve">Dokumentation &amp; Verlaufsprotokoll</w:t></w:r></w:p>';
     var now = new Date();
-    body += '<w:p><w:pPr><w:spacing w:after="240"/></w:pPr><w:r><w:rPr><w:color w:val="666666"/><w:sz w:val="18"/></w:rPr>' +
-      '<w:t xml:space="preserve">Export erstellt am ' + xmlEsc(formatDateShort(now) + " · " + formatTime(now)) + '</w:t></w:r></w:p>';
+    body += '<w:p><w:pPr><w:spacing w:after="320"/></w:pPr><w:r><w:rPr><w:color w:val="999999"/><w:sz w:val="18"/></w:rPr>' +
+      '<w:t xml:space="preserve">Erstellt am ' + xmlEsc(formatDateShort(now) + " · " + formatTime(now)) + '</w:t></w:r></w:p>';
 
     body += wHeadingXml("Log", 2);
     var sorted = state.entries.slice().sort(function (a, b) { return new Date(a.timestamp) - new Date(b.timestamp); });
     if (!sorted.length) {
       body += '<w:p><w:r><w:t xml:space="preserve">Keine Einträge vorhanden.</w:t></w:r></w:p>';
     } else {
-      var lastDay = null;
+      var lastDay = null, dayBucket = [];
+      var flushDay = function () {
+        if (dayBucket.length) { body += wDayTableXml(dayBucket); dayBucket = []; }
+      };
       sorted.forEach(function (entry) {
         var key = dateToKey(new Date(entry.timestamp));
-        if (key !== lastDay) { body += wHeadingXml(formatDateFullAbsolute(key), 3); lastDay = key; }
-        body += wEntryXml(entry);
+        if (key !== lastDay) {
+          flushDay();
+          body += wHeadingXml(formatDateFullAbsolute(key), 3);
+          lastDay = key;
+        }
+        dayBucket.push(entry);
       });
+      flushDay();
     }
 
     body += wHeadingXml("Schichtfotos", 2);
@@ -1480,16 +1672,20 @@
       imageRelMap.forEach(function (img) {
         var parts = img.shift.date.split("-").map(Number);
         var d = new Date(parts[0], parts[1] - 1, parts[2]);
-        var headingBits = [formatDateShort(d), img.shift.type];
-        if (img.shift.station) headingBits.push(img.shift.station);
-        var leader = img.shift.leitungId ? getPerson(img.shift.leitungId) : null;
-        if (leader) headingBits.push("Leitung: " + leader.name);
-        body += wHeadingXml(headingBits.join(" · "), 3);
+        body += wHeadingXml(formatDateShort(d) + " · " + img.shift.type, 3);
         body += wImageXml(img);
+        var captionBits = [];
+        if (img.shift.station) captionBits.push(img.shift.station);
+        var leader = img.shift.leitungId ? getPerson(img.shift.leitungId) : null;
+        if (leader) captionBits.push("Leitung: " + leader.name);
+        if (captionBits.length) body += wCaptionXml(captionBits.join(" · "));
       });
     }
 
-    body += '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1134" w:right="1134" w:bottom="1134" w:left="1134"/></w:sectPr>';
+    body += '<w:sectPr>' +
+      '<w:footerReference w:type="default" r:id="rIdFooter"/>' +
+      '<w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1134" w:right="1134" w:bottom="1134" w:left="1134" w:footer="567"/>' +
+    '</w:sectPr>';
     return body;
   }
 
@@ -1525,25 +1721,44 @@
           '<w:body>' + buildWordBodyXml(imageRelMap) + '</w:body></w:document>';
 
         relEntries.unshift('<Relationship Id="rIdStyles" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>');
+        relEntries.unshift('<Relationship Id="rIdFooter" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer1.xml"/>');
 
         var documentRels = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
           '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' + relEntries.join("") + '</Relationships>';
 
+        // Fusszeile: App-Name links, Seitenzahl rechts (via Tab-Stopp auf die
+        // volle Satzspiegelbreite), mit einer dünnen Trennlinie darüber –
+        // gibt dem Dokument den Charakter eines formellen, gedruckten Berichts.
+        var footerXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+          '<w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">' +
+          '<w:p><w:pPr>' +
+            '<w:pBdr><w:top w:val="single" w:sz="4" w:space="6" w:color="DDE4E1"/></w:pBdr>' +
+            '<w:tabs><w:tab w:val="right" w:pos="9638"/></w:tabs>' +
+            '<w:spacing w:before="160"/>' +
+          '</w:pPr>' +
+          '<w:r><w:rPr><w:color w:val="999999"/><w:sz w:val="17"/></w:rPr><w:t xml:space="preserve">Schichtprotokoll</w:t></w:r>' +
+          '<w:r><w:rPr><w:color w:val="999999"/><w:sz w:val="17"/></w:rPr><w:tab/><w:t xml:space="preserve">Seite </w:t></w:r>' +
+          '<w:fldSimple w:instr=" PAGE "><w:r><w:rPr><w:color w:val="999999"/><w:sz w:val="17"/></w:rPr><w:t>1</w:t></w:r></w:fldSimple>' +
+          '</w:p></w:ftr>';
+
         // Minimale, aber explizite Formatvorlagen – ohne sie würden Word bzw.
         // andere Reader (z. B. python-docx) die Heading-Verweise ignorieren
-        // und alles als "Normal" darstellen.
+        // und alles als "Normal" darstellen. Trennlinien unter Titel/
+        // Abschnittsüberschriften geben dem Dokument einen "Report"-Look.
         var stylesXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
           '<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">' +
           '<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/><w:sz w:val="21"/></w:rPr></w:rPrDefault></w:docDefaults>' +
           '<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/></w:style>' +
           '<w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:qFormat/>' +
-            '<w:pPr><w:keepNext/><w:spacing w:before="0" w:after="120"/><w:outlineLvl w:val="0"/></w:pPr>' +
-            '<w:rPr><w:b/><w:sz w:val="34"/><w:color w:val="0F5C56"/></w:rPr></w:style>' +
+            '<w:pPr><w:keepNext/><w:pBdr><w:bottom w:val="single" w:sz="18" w:space="10" w:color="0F5C56"/></w:pBdr>' +
+            '<w:spacing w:before="0" w:after="200"/><w:outlineLvl w:val="0"/></w:pPr>' +
+            '<w:rPr><w:b/><w:sz w:val="36"/><w:color w:val="0F5C56"/></w:rPr></w:style>' +
           '<w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="heading 2"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:qFormat/>' +
-            '<w:pPr><w:keepNext/><w:spacing w:before="280" w:after="120"/><w:outlineLvl w:val="1"/></w:pPr>' +
+            '<w:pPr><w:keepNext/><w:pBdr><w:bottom w:val="single" w:sz="6" w:space="4" w:color="DDE4E1"/></w:pBdr>' +
+            '<w:spacing w:before="320" w:after="160"/><w:outlineLvl w:val="1"/></w:pPr>' +
             '<w:rPr><w:b/><w:sz w:val="27"/><w:color w:val="0F5C56"/></w:rPr></w:style>' +
           '<w:style w:type="paragraph" w:styleId="Heading3"><w:name w:val="heading 3"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:qFormat/>' +
-            '<w:pPr><w:keepNext/><w:spacing w:before="200" w:after="80"/><w:outlineLvl w:val="2"/></w:pPr>' +
+            '<w:pPr><w:keepNext/><w:spacing w:before="200" w:after="90"/><w:outlineLvl w:val="2"/></w:pPr>' +
             '<w:rPr><w:b/><w:sz w:val="23"/><w:color w:val="333333"/></w:rPr></w:style>' +
           '</w:styles>';
 
@@ -1554,6 +1769,7 @@
           '<Default Extension="jpeg" ContentType="image/jpeg"/>' +
           '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>' +
           '<Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>' +
+          '<Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>' +
           '<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>' +
           '<Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>' +
           '</Types>';
@@ -1584,6 +1800,7 @@
           { name: "docProps/app.xml", data: enc.encode(appXml) },
           { name: "word/document.xml", data: enc.encode(documentXml) },
           { name: "word/styles.xml", data: enc.encode(stylesXml) },
+          { name: "word/footer1.xml", data: enc.encode(footerXml) },
           { name: "word/_rels/document.xml.rels", data: enc.encode(documentRels) }
         ].concat(mediaFiles);
 
@@ -1609,17 +1826,123 @@
      Export / Import
      --------------------------------------------------------------------- */
   function exportData() {
-    var blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
+    var stamp = todayKey();
+    var zipFilename = "schichtprotokoll-fotos-" + stamp + ".zip";
+    var shiftsWithPhotos = state.shifts.filter(function (s) { return s.photo; });
+    var hasPhotos = shiftsWithPhotos.length > 0;
+
+    // JSON bewusst OHNE die (teils grossen) Foto-Daten – die Fotos werden
+    // stattdessen in einem separaten ZIP mitgeliefert. "hasPhoto" markiert,
+    // welche Schichten beim Import wieder aus dem ZIP befüllt werden müssen.
+    var exportState = {
+      categories: state.categories,
+      people: state.people,
+      entries: state.entries,
+      shifts: state.shifts.map(function (s) {
+        var copy = {};
+        for (var k in s) { if (k !== "photo") copy[k] = s[k]; }
+        copy.hasPhoto = !!s.photo;
+        return copy;
+      }),
+      settings: state.settings,
+      _meta: {
+        exportedAt: new Date().toISOString(),
+        photosZipFilename: hasPhotos ? zipFilename : null
+      }
+    };
+
+    var blob = new Blob([JSON.stringify(exportState, null, 2)], { type: "application/json" });
     var url = URL.createObjectURL(blob);
     var a = document.createElement("a");
-    var stamp = todayKey();
     a.href = url;
     a.download = "schichtprotokoll-export-" + stamp + ".json";
     document.body.appendChild(a);
     a.click();
     a.remove();
     setTimeout(function () { URL.revokeObjectURL(url); }, 2000);
-    toast("Export gestartet");
+
+    if (!hasPhotos) {
+      toast("Export gestartet");
+      return;
+    }
+
+    // Zweiter Download: die Fotos als ZIP, mit dem exakten Dateinamen, der
+    // auch im JSON hinterlegt ist (siehe photosZipFilename), damit der
+    // spätere Import weiss, wonach er fragen soll. Kurze Verzögerung, damit
+    // der Browser die beiden Downloads sicher als zwei Dateien behandelt.
+    setTimeout(function () {
+      var files = shiftsWithPhotos.map(function (s) {
+        return { name: s.id + ".jpeg", data: dataUrlToBytes(s.photo) };
+      });
+      var zipBytes = buildZip(files);
+      var zipBlob = new Blob([zipBytes], { type: "application/zip" });
+      var zipUrl = URL.createObjectURL(zipBlob);
+      var za = document.createElement("a");
+      za.href = zipUrl;
+      za.download = zipFilename;
+      document.body.appendChild(za);
+      za.click();
+      za.remove();
+      setTimeout(function () { URL.revokeObjectURL(zipUrl); }, 2000);
+      toast("Export gestartet – 2 Dateien: JSON + Fotos-ZIP");
+    }, 350);
+  }
+
+  // Prüft, ob die importierte Datei Foto-Verweise enthält, die aus einem
+  // separaten ZIP wiederhergestellt werden müssen, und fragt in diesem Fall
+  // gezielt danach (inkl. dem beim Export vergebenen Dateinamen). callback
+  // erhält das (ggf. um die Fotos ergänzte) imported-Objekt.
+  function proceedWithPhotoZip(imported, callback) {
+    var expectedZipName = imported._meta && imported._meta.photosZipFilename;
+    var needsPhotos = Array.isArray(imported.shifts) && imported.shifts.some(function (s) { return s.hasPhoto; });
+    if (!needsPhotos) { callback(imported); return; }
+
+    var sheet = openModal("Schicht-Fotos importieren", '' +
+      '<p class="modal-text">Diese Datei verweist auf Schicht-Fotos, die beim Export separat als ZIP heruntergeladen wurden' +
+      (expectedZipName ? ': <strong>' + esc(expectedZipName) + '</strong>.' : '.') +
+      ' Wähle diese ZIP-Datei aus, um die Fotos wiederherzustellen – oder fahre ohne Fotos fort.</p>' +
+      '<div class="modal-field"><input type="file" id="photoZipInput" accept=".zip,application/zip"></div>' +
+      '<div class="modal-actions">' +
+        '<button type="button" class="btn btn--ghost" id="skipZipBtn">Ohne Fotos fortfahren</button>' +
+        '<button type="button" class="btn btn--primary" id="loadZipBtn">Fotos laden</button>' +
+      '</div>');
+
+    sheet.querySelector("#skipZipBtn").addEventListener("click", function () {
+      imported.shifts.forEach(function (s) { delete s.hasPhoto; });
+      closeModal();
+      callback(imported);
+    });
+    sheet.querySelector("#loadZipBtn").addEventListener("click", function () {
+      var zipFile = sheet.querySelector("#photoZipInput").files[0];
+      if (!zipFile) { toast("Bitte zuerst eine ZIP-Datei auswählen."); return; }
+      if (expectedZipName && zipFile.name !== expectedZipName) {
+        toast("Hinweis: Dateiname weicht ab – versuche trotzdem, die Fotos zu laden.");
+      }
+      var zr = new FileReader();
+      zr.onload = function () {
+        try {
+          var entries = readZipEntries(zr.result);
+          var byName = {};
+          entries.forEach(function (en) { if (!en.unsupported) byName[en.name] = en.data; });
+          var restored = 0, missing = 0;
+          imported.shifts.forEach(function (s) {
+            if (s.hasPhoto) {
+              var data = byName[s.id + ".jpeg"];
+              if (data) { s.photo = bytesToDataUrl(data, "image/jpeg"); restored++; }
+              else { missing++; }
+              delete s.hasPhoto;
+            }
+          });
+          closeModal();
+          toast(missing ? (restored + " Foto(s) wiederhergestellt, " + missing + " nicht gefunden.") : (restored + " Foto(s) wiederhergestellt."));
+          callback(imported);
+        } catch (err) {
+          toast(err.message || "ZIP-Datei konnte nicht gelesen werden.");
+        }
+      };
+      zr.onerror = function () { toast("ZIP-Datei konnte nicht gelesen werden."); };
+      zr.readAsArrayBuffer(zipFile);
+    });
   }
 
   function importData(e) {
@@ -1650,25 +1973,29 @@
           '<button type="button" class="btn btn--danger" id="replaceBtn">Ersetzen</button>' +
         '</div>');
       sheet.querySelector("#mergeBtn").addEventListener("click", function () {
-        mergeImported(imported);
         closeModal();
-        e.target.value = "";
+        proceedWithPhotoZip(imported, function (finalImported) {
+          mergeImported(finalImported);
+          e.target.value = "";
+        });
       });
       sheet.querySelector("#replaceBtn").addEventListener("click", function () {
         confirmDialog("Wirklich alle aktuellen Daten überschreiben?", "Ersetzen", true).then(function (ok) {
           if (!ok) { e.target.value = ""; return; }
-          state = {
-            categories: Array.isArray(imported.categories) && imported.categories.length ? imported.categories : defaultState().categories,
-            people: Array.isArray(imported.people) ? imported.people : [],
-            entries: Array.isArray(imported.entries) ? imported.entries : [],
-            shifts: Array.isArray(imported.shifts) ? imported.shifts : [],
-            settings: imported.settings || defaultState().settings
-          };
-          persist();
           closeModal();
-          refreshAllViews();
-          toast("Daten ersetzt");
-          e.target.value = "";
+          proceedWithPhotoZip(imported, function (finalImported) {
+            state = {
+              categories: Array.isArray(finalImported.categories) && finalImported.categories.length ? finalImported.categories : defaultState().categories,
+              people: Array.isArray(finalImported.people) ? finalImported.people : [],
+              entries: Array.isArray(finalImported.entries) ? finalImported.entries : [],
+              shifts: Array.isArray(finalImported.shifts) ? finalImported.shifts : [],
+              settings: finalImported.settings || defaultState().settings
+            };
+            persist();
+            refreshAllViews();
+            toast("Daten ersetzt");
+            e.target.value = "";
+          });
         });
       });
     };
