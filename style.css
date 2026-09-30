@@ -27,6 +27,8 @@
   /* Kopfzeile: bewusst fest, nicht theme-abhängig (siehe .app-header) */
   --header-bg: #4FC2B4;
   --header-fg: #0B453F;
+  --patient-accent: #B34D7A;
+  --patient-tint: #F7E9EF;
 
   --radius-s: 8px;
   --radius-m: 14px;
@@ -51,6 +53,8 @@
   --danger: #E28873;
   --danger-tint: #34211D;
   --focus: #5AA4FF;
+  --patient-accent: #E58BB0;
+  --patient-tint: #35202A;
 }
 
 @media (prefers-color-scheme: dark){
@@ -69,6 +73,8 @@
     --danger: #E28873;
     --danger-tint: #34211D;
     --focus: #5AA4FF;
+    --patient-accent: #E58BB0;
+    --patient-tint: #35202A;
   }
 }
 
@@ -172,6 +178,28 @@ main#views{
   font-size: 14px; padding: 6px 4px; cursor: pointer;
 }
 .entry-photo-link{ display: block; margin-top: 4px; padding-left: 0; font-size: 13px; }
+.entry-photo-thumb{
+  display: inline-flex; align-items: center; gap: 8px;
+  margin-top: 6px; padding: 4px 12px 4px 4px;
+  border: 1px solid var(--border); background: var(--surface-2);
+  border-radius: var(--radius-full); cursor: pointer;
+}
+.entry-photo-thumb img{
+  width: 28px; height: 28px; border-radius: 50%;
+  object-fit: cover; flex-shrink: 0;
+}
+.entry-photo-thumb span{ font-size: 12.5px; font-weight: 650; color: var(--primary); }
+
+.stat-list{ display: flex; flex-direction: column; gap: 11px; max-height: 50vh; overflow-y: auto; margin-bottom: 4px; }
+.stat-row{ display: flex; align-items: center; gap: 10px; }
+.stat-row__label{
+  width: 108px; flex-shrink: 0; font-size: 13px; font-weight: 650; color: var(--accent);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.stat-row__bar{ flex: 1; height: 10px; background: var(--surface-2); border-radius: var(--radius-full); overflow: hidden; }
+.stat-row__fill{ height: 100%; background: var(--accent); border-radius: var(--radius-full); }
+.icon-svg{ width: 1em; height: 1em; display: inline-block; vertical-align: -0.125em; }
+.stat-row__count{ width: 26px; text-align: right; font-size: 12.5px; color: var(--text-muted); flex-shrink: 0; }
 
 .icon-btn{
   appearance: none; border: none; background: transparent; color: #fff;
@@ -234,6 +262,16 @@ main#views{
 }
 
 .chip-row{ display: flex; flex-wrap: wrap; gap: 8px; }
+
+/* Vorlagen: einzeiliger, horizontal wischbarer Streifen – spart auf dem
+   Handy Höhe, damit "Speichern" auf der Schnellerfassung erreichbar bleibt. */
+#templateChips{
+  flex-wrap: nowrap; overflow-x: auto; padding-bottom: 6px;
+  -webkit-overflow-scrolling: touch; scrollbar-width: none;
+  margin-right: -14px; padding-right: 14px;
+}
+#templateChips::-webkit-scrollbar{ display: none; }
+#templateChips .chip{ flex-shrink: 0; }
 
 .chip{
   appearance: none; cursor: pointer;
@@ -385,6 +423,7 @@ main#views{
 .cal-day__dots span{ width: 5px; height: 5px; border-radius: 50%; background: var(--primary); }
 .cal-day.is-selected .cal-day__dots span{ background: #fff; }
 
+.cal-toolbar{ display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 4px; }
 .filter-toggle{
   display: inline-flex; align-items: center; gap: 6px;
   background: var(--surface); border: 1px solid var(--border);
@@ -437,6 +476,13 @@ main#views{
 .settings-hint{ font-size: 13px; color: var(--text-muted); margin-bottom: 12px; line-height: 1.6; }
 .settings-section .btn{ margin-bottom: 8px; }
 .settings-section--danger h2{ color: var(--danger); }
+.export-range{ margin-bottom: 14px; }
+.export-range__row{ display: flex; align-items: center; gap: 6px; }
+.export-range__row input[type="date"]{
+  flex: 1; min-width: 0; border: 1px solid var(--border); background: var(--surface);
+  border-radius: var(--radius-s); padding: 9px 8px; font-size: 13px; color: var(--text);
+}
+.export-range__sep{ color: var(--text-muted); flex-shrink: 0; }
 
 .segmented{
   display: flex; background: var(--surface-2); border-radius: var(--radius-full); padding: 3px; gap: 3px;
@@ -509,6 +555,32 @@ main#views{
   box-shadow: 0 8px 24px rgba(0,0,0,.25);
 }
 
+.undo-toast{
+  position: fixed;
+  left: 50%;
+  bottom: calc(78px + var(--safe-bottom));
+  transform: translateX(-50%);
+  background: var(--text);
+  color: var(--bg);
+  padding: 8px 8px 8px 18px;
+  border-radius: var(--radius-full);
+  font-size: 14px;
+  font-weight: 600;
+  z-index: 61;
+  max-width: 92%;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  box-shadow: 0 8px 24px rgba(0,0,0,.25);
+}
+.undo-toast__msg{ white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.undo-toast__btn{
+  background: var(--header-bg); color: var(--header-fg);
+  border: none; border-radius: var(--radius-full);
+  font-weight: 700; font-size: 13px;
+  padding: 8px 14px; cursor: pointer; flex-shrink: 0;
+}
+
 /* ---------- Modal ---------- */
 .modal-overlay{
   position: fixed; inset: 0; z-index: 100;
@@ -535,6 +607,7 @@ main#views{
 .modal-field input[type="date"],
 .modal-field input[type="time"],
 .modal-field input[type="datetime-local"],
+.modal-field input[type="number"],
 .modal-field select,
 .modal-field textarea{
   width: 100%; border: 1px solid var(--border); background: var(--bg);
@@ -544,6 +617,7 @@ main#views{
 .modal-actions{ display: flex; gap: 10px; margin-top: 4px; }
 .modal-actions .btn{ flex: 1; }
 .modal-text{ font-size: 14.5px; color: var(--text); line-height: 1.6; margin-bottom: 16px; }
+.btn:disabled{ opacity: .5; cursor: not-allowed; }
 
 .color-swatch-row{ display: flex; flex-wrap: wrap; gap: 8px; }
 .color-swatch{
@@ -608,6 +682,186 @@ main#views{
 .onboarding-nav{ display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .onboarding-nav .btn{ flex: 1; }
 
+/* ---------- App-Sperre (PIN) ---------- */
+.lock-overlay{
+  position: fixed; inset: 0; z-index: 90;
+  background: var(--bg);
+  display: flex; align-items: center; justify-content: center;
+  padding: 20px;
+  padding-top: calc(20px + var(--safe-top));
+  padding-bottom: calc(20px + var(--safe-bottom));
+}
+.lock-card{ width: 100%; max-width: 360px; text-align: center; }
+#lockForgotBtn{ margin-top: 22px; }
+
+.pinpad{ text-align: center; }
+.pinpad__subtitle{ font-size: 14px; color: var(--text-muted); margin-bottom: 18px; min-height: 18px; }
+.pinpad__dots{ display: flex; justify-content: center; gap: 14px; margin-bottom: 26px; }
+.pinpad__dots.is-error{ animation: pinShake .4s; }
+@keyframes pinShake{
+  10%, 90% { transform: translateX(-2px); }
+  20%, 80% { transform: translateX(4px); }
+  30%, 50%, 70% { transform: translateX(-8px); }
+  40%, 60% { transform: translateX(8px); }
+}
+.pin-dot{
+  width: 14px; height: 14px; border-radius: 50%;
+  border: 2px solid var(--border); background: transparent;
+  transition: background .15s, border-color .15s;
+}
+.pin-dot.is-filled{ background: var(--primary); border-color: var(--primary); }
+.pinpad__keys{
+  display: grid; grid-template-columns: repeat(3, 1fr);
+  gap: 12px; max-width: 260px; margin: 0 auto;
+}
+.pin-key{
+  aspect-ratio: 1; border-radius: 50%;
+  border: 1px solid var(--border); background: var(--surface);
+  font-size: 21px; font-weight: 600; color: var(--text); cursor: pointer;
+}
+.pin-key:active{ background: var(--surface-2); }
+.pin-key--empty{ visibility: hidden; }
+.pin-key--back{ font-size: 18px; }
+
 @media (min-width: 560px){
   .bottom-nav{ border-radius: 0; }
 }
+
+/* ---------- Tablet / breites Querformat ---------- */
+@media (min-width: 760px){
+  #app{ max-width: 900px; }
+  .bottom-nav{ max-width: 900px; }
+  main#views{ padding-left: 28px; padding-right: 28px; }
+
+  /* Kalender: Monatsgitter und Ereignisliste nebeneinander statt
+     übereinander – nutzt die Breite, statt eine lange Liste unter einem
+     schmalen Kalender zu verstecken. */
+  #view-kalender{
+    display: grid;
+    grid-template-columns: 400px 1fr;
+    column-gap: 32px;
+    row-gap: 0;
+    align-items: start;
+    grid-template-areas:
+      "calhead   listhead"
+      "weekdays  listhead"
+      "grid      list"
+      "toolbar   list"
+      "filter    list";
+  }
+  #view-kalender .cal-header{ grid-area: calhead; }
+  #view-kalender .cal-weekdays{ grid-area: weekdays; }
+  #view-kalender .cal-grid{ grid-area: grid; }
+  #view-kalender .cal-toolbar{ grid-area: toolbar; }
+  #view-kalender #calFilterPanel{ grid-area: filter; }
+  #view-kalender .cal-list-header{ grid-area: listhead; align-self: end; }
+  #view-kalender #calList{ grid-area: list; }
+  #view-kalender #calEmpty{ grid-area: list; }
+
+  /* Log/Start/Kontakte/Mehr bleiben inhaltlich einspaltig, aber mit
+     angenehmerer Zeilenlänge statt über die volle Breite zu laufen. */
+  #view-start .entry-form,
+  #view-log,
+  #view-kontakte,
+  #view-mehr{
+    max-width: 620px;
+  }
+}
+
+/* ---------- Übergabe-Zusammenfassung ---------- */
+.log-toolbar{ display: flex; justify-content: flex-end; margin: -4px 0 6px; }
+.handover-text{
+  width: 100%; min-height: 220px; resize: vertical;
+  border: 1px solid var(--border); background: var(--bg); color: var(--text);
+  border-radius: var(--radius-s); padding: 12px; font-size: 14px; line-height: 1.5;
+  font-family: inherit;
+}
+
+/* ---------- Modus-Umschalter (Neu / Kontakte) ---------- */
+.mode-switch{
+  display: flex; background: var(--surface-2); border-radius: var(--radius-full);
+  padding: 3px; gap: 3px; margin-bottom: 14px;
+}
+.mode-switch button{
+  flex: 1; border: none; background: transparent; border-radius: var(--radius-full);
+  padding: 10px 8px; font-size: 14px; font-weight: 650; color: var(--text-muted); cursor: pointer;
+}
+.mode-switch button.is-active{ background: var(--surface); color: var(--primary); box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+
+/* ---------- Patienten-Modus: Formular ---------- */
+.patient-selected-card{
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  background: var(--patient-tint); border-radius: var(--radius-m); padding: 12px 14px;
+}
+.patient-selected-card__name{ font-weight: 700; color: var(--patient-accent); flex: 1; min-width: 120px; }
+.patient-selected-card__meta{ font-size: 12.5px; color: var(--text-muted); width: 100%; }
+
+.dyn-row{
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius-m); padding: 10px 12px; margin-bottom: 8px;
+}
+.dyn-row select{
+  border: 1px solid var(--border); background: var(--bg); border-radius: var(--radius-s);
+  padding: 8px 8px; font-size: 13.5px; color: var(--text); flex: 1 1 120px; min-width: 0;
+}
+.dyn-row input[type="text"]{
+  border: 1px solid var(--border); background: var(--bg); border-radius: var(--radius-s);
+  padding: 8px 8px; font-size: 13.5px; color: var(--text); flex: 1 1 90px; min-width: 0;
+}
+.dyn-row__remove{
+  background: none; border: none; color: var(--text-muted); cursor: pointer;
+  font-size: 18px; padding: 2px 4px; flex-shrink: 0; line-height: 1;
+}
+.dyn-row__status{ display: flex; gap: 4px; flex-shrink: 0; }
+.dyn-row__status button{
+  border: 1px solid var(--border); background: var(--bg); color: var(--text-muted);
+  border-radius: var(--radius-full); padding: 6px 10px; font-size: 12px; font-weight: 650; cursor: pointer;
+}
+.dyn-row__status button.is-active{ background: var(--primary); border-color: var(--primary); color: #fff; }
+.dyn-row__status button.is-active[data-status="abgelehnt"]{ background: var(--danger); border-color: var(--danger); }
+.dyn-row__status button.is-active[data-status="teilweise"]{ background: var(--accent); border-color: var(--accent); }
+.dyn-row__name{ font-weight: 650; font-size: 13.5px; flex: 1 1 100px; }
+
+/* ---------- Option-Listen (Mehr → Patienten-Modus) ---------- */
+.patient-config-block{ margin-bottom: 18px; }
+.patient-config-block__head{ font-size: 13px; font-weight: 700; color: var(--text-muted); margin-bottom: 8px; }
+.option-list{ display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+.option-row{
+  display: flex; align-items: center; gap: 8px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius-m); padding: 9px 12px;
+}
+.option-row__label{ flex: 1; font-size: 14px; font-weight: 600; }
+.option-row__edit{ background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 15px; padding: 4px 6px; }
+
+/* ---------- Patienten-Liste (Kontakte) ---------- */
+.patient-row{
+  display: flex; align-items: center; gap: 12px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius-m); padding: 11px 14px; margin-bottom: 6px; cursor: pointer;
+}
+.patient-row__avatar{
+  width: 38px; height: 38px; border-radius: 50%; flex-shrink: 0;
+  background: var(--patient-tint); color: var(--patient-accent);
+  display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 15px;
+}
+.patient-row__name{ font-weight: 650; font-size: 15px; }
+.patient-row__meta{ display: block; font-weight: 400; font-size: 12.5px; color: var(--text-muted); margin-top: 1px; }
+.patient-row__edit{ background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 16px; padding: 4px 6px; flex-shrink: 0; }
+
+/* ---------- Anzeige patientenbezogener Einträge in Log/Kalender ---------- */
+.entry-item__patient{
+  display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap;
+  font-weight: 700; color: var(--patient-accent); margin-bottom: 3px; font-size: 14.5px;
+}
+.entry-item__patient-meta{ font-weight: 400; font-size: 12.5px; color: var(--text-muted); }
+.entry-item__structured{ display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+.mini-pill{
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 12px; font-weight: 600; color: var(--text);
+  background: var(--surface-2); border-radius: var(--radius-full); padding: 3px 9px;
+}
+.mini-pill--warn{ background: var(--danger-tint); color: var(--danger); }
+.entry-item__detail-section{ margin-bottom: 10px; }
+.entry-item__detail-label{ font-size: 12px; font-weight: 700; color: var(--text-muted); margin-bottom: 4px; }

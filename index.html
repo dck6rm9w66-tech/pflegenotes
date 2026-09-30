@@ -14,10 +14,10 @@
 
   <header class="app-header">
     <div class="app-header__title">
-      <span class="app-header__logo" aria-hidden="true">🩺</span>
+      <span class="app-header__logo" aria-hidden="true"><svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3v6a4 4 0 0 0 8 0V3"/><path d="M10 15v2a5 5 0 0 0 10 0v-3"/><circle cx="20" cy="10" r="2"/><path d="M6 3H4M14 3h2"/></svg></span>
       <h1>Schichtprotokoll</h1>
     </div>
-    <button id="themeToggle" class="icon-btn" type="button" aria-label="Darstellung wechseln">◐</button>
+    <button id="themeToggle" class="icon-btn" type="button" aria-label="Darstellung wechseln"><svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg></button>
   </header>
 
   <main id="views">
@@ -25,44 +25,63 @@
     <!-- START / SCHNELLERFASSUNG -->
     <section id="view-start" class="view" data-view="start">
 
-      <div class="shift-bar">
-        <button id="shiftTypeBtn" class="shift-pill" type="button" aria-label="Schicht ändern">
-          <span id="shiftDateLabel">–</span>
-          <span class="shift-pill__sep">·</span>
-          <span id="shiftTypeLabel">Frühdienst</span>
-        </button>
-        <button id="shiftPhotoBtn" class="icon-btn icon-btn--surface" type="button" aria-label="Foto Zuteilungsplan für diese Schicht">📷</button>
+      <div class="mode-switch" id="entryModeSwitch" role="radiogroup" aria-label="Dokumentationsmodus">
+        <button type="button" data-mode="shift" class="is-active">Nach Schicht</button>
+        <button type="button" data-mode="patient">Nach Patient</button>
       </div>
 
-      <form id="entryForm" class="entry-form">
-        <label for="entryText" class="visually-hidden">Situation kurz beschreiben</label>
-        <textarea id="entryText" class="entry-textarea" placeholder="Was ist passiert? Kurz notieren …" rows="4"></textarea>
-
-        <button type="button" id="timeStampBtn" class="timestamp-btn">
-          <span id="timestampLabel">Jetzt</span>
-          <span class="timestamp-btn__edit">Zeit ändern</span>
-        </button>
-
-        <div class="involved">
-          <div class="involved__label">Beteiligt</div>
-          <div id="personChips" class="chip-row"></div>
+      <div id="shiftModeWrap">
+        <div class="shift-bar">
+          <button id="shiftTypeBtn" class="shift-pill" type="button" aria-label="Schicht ändern">
+            <span id="shiftDateLabel">–</span>
+            <span class="shift-pill__sep">·</span>
+            <span id="shiftTypeLabel">Frühdienst</span>
+          </button>
+          <button id="shiftPhotoBtn" class="icon-btn icon-btn--surface" type="button" aria-label="Foto Zuteilungsplan für diese Schicht"><svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8a2 2 0 0 1 2-2h1.2a2 2 0 0 0 1.6-.8l.8-1.07A2 2 0 0 1 11.2 3h1.6a2 2 0 0 1 1.6.8l.8 1.07a2 2 0 0 0 1.6.8H18a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/><circle cx="12" cy="13" r="3.5"/></svg></button>
         </div>
 
-        <div class="involved">
-          <div class="involved__label">Hashtags</div>
-          <div id="hashtagChips" class="chip-row"></div>
-        </div>
+        <form id="entryForm" class="entry-form">
+          <label for="entryText" class="visually-hidden">Situation kurz beschreiben</label>
+          <textarea id="entryText" class="entry-textarea" placeholder="Was ist passiert? Kurz notieren …" rows="4"></textarea>
 
-        <div class="save-bar">
-          <button type="submit" class="btn btn--primary btn--block">Eintrag speichern</button>
-        </div>
-      </form>
+          <div class="involved">
+            <div class="involved__label">Vorlagen</div>
+            <div id="templateChips" class="chip-row"></div>
+          </div>
+
+          <button type="button" id="timeStampBtn" class="timestamp-btn">
+            <span id="timestampLabel">Jetzt</span>
+            <span class="timestamp-btn__edit">Zeit ändern</span>
+          </button>
+
+          <div class="involved">
+            <div class="involved__label">Beteiligt</div>
+            <div id="personChips" class="chip-row"></div>
+          </div>
+
+          <div class="involved">
+            <div class="involved__label">Hashtags</div>
+            <div id="hashtagChips" class="chip-row"></div>
+          </div>
+
+          <div class="save-bar">
+            <button type="submit" class="btn btn--primary btn--block">Eintrag speichern</button>
+          </div>
+        </form>
+      </div>
+
+      <div id="patientModeWrap" hidden>
+        <div id="patientFormRoot"></div>
+      </div>
     </section>
 
     <!-- LOG -->
     <section id="view-log" class="view" data-view="log" hidden>
       <div class="search-bar">
-        <input type="search" id="logSearch" placeholder="Log durchsuchen …" aria-label="Log durchsuchen" enterkeyhint="search">
+        <input type="search" id="logSearch" placeholder="Log durchsuchen (auch Patientenname) …" aria-label="Log durchsuchen" enterkeyhint="search">
+      </div>
+      <div class="log-toolbar">
+        <button id="handoverBtn" class="link-btn" type="button"><svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="margin-right:4px;"><rect x="6" y="4" width="12" height="17" rx="2"/><path d="M9 4V3h6v1M9 10h6M9 14h6M9 18h3"/></svg>Übergabe-Zusammenfassung</button>
       </div>
       <div id="logList" class="entry-list"></div>
       <p id="logEmpty" class="empty-state" hidden>Noch keine Einträge. Dein erster Eintrag erscheint hier, sobald du ihn unter „Neu“ speicherst.</p>
@@ -80,9 +99,12 @@
       </div>
       <div id="calGrid" class="cal-grid"></div>
 
-      <button id="calFilterToggle" class="filter-toggle" type="button" aria-expanded="false">
-        Filter <span id="calFilterCount" class="filter-toggle__count" hidden>0</span>
-      </button>
+      <div class="cal-toolbar">
+        <button id="calFilterToggle" class="filter-toggle" type="button" aria-expanded="false">
+          Filter <span id="calFilterCount" class="filter-toggle__count" hidden>0</span>
+        </button>
+        <button id="hashtagStatsBtn" class="link-btn" type="button"><svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="margin-right:4px;"><path d="M4 20V10M12 20V4M20 20v-7"/></svg>Hashtag-Statistik</button>
+      </div>
       <div id="calFilterPanel" class="filter-panel" hidden>
         <div class="filter-panel__group">
           <div class="filter-panel__label">Kategorie</div>
@@ -95,6 +117,10 @@
         <div class="filter-panel__group">
           <div class="filter-panel__label">Hashtag</div>
           <div id="filterHashtags" class="chip-row"></div>
+        </div>
+        <div class="filter-panel__group">
+          <div class="filter-panel__label">Patient/in</div>
+          <div id="filterPatients" class="chip-row"></div>
         </div>
         <button id="filterReset" class="btn btn--ghost btn--small" type="button">Filter zurücksetzen</button>
       </div>
@@ -109,10 +135,25 @@
 
     <!-- KONTAKTE -->
     <section id="view-kontakte" class="view" data-view="kontakte" hidden>
-      <div id="categoryList" class="category-list"></div>
-      <div class="kontakte-actions">
-        <button id="addPersonBtn" class="btn btn--primary btn--block" type="button">+ Person hinzufügen</button>
-        <button id="addCategoryBtn" class="btn btn--ghost btn--block" type="button">+ Eigene Kategorie</button>
+      <div class="mode-switch" id="kontakteModeSwitch" role="radiogroup" aria-label="Ansicht">
+        <button type="button" data-kmode="personen" class="is-active">Personen</button>
+        <button type="button" data-kmode="patienten">Patienten</button>
+      </div>
+
+      <div id="personenWrap">
+        <div id="categoryList" class="category-list"></div>
+        <div class="kontakte-actions">
+          <button id="addPersonBtn" class="btn btn--primary btn--block" type="button">+ Person hinzufügen</button>
+          <button id="addCategoryBtn" class="btn btn--ghost btn--block" type="button">+ Eigene Kategorie</button>
+        </div>
+      </div>
+
+      <div id="patientenWrap" hidden>
+        <div class="search-bar">
+          <input type="search" id="patientSearch" placeholder="Patient/in durchsuchen …" aria-label="Patient/in durchsuchen">
+        </div>
+        <div id="patientList" class="shift-photo-list"></div>
+        <button id="addPatientBtn" class="btn btn--primary btn--block" type="button">+ Patient/in hinzufügen</button>
       </div>
     </section>
 
@@ -131,12 +172,70 @@
       </section>
 
       <section class="settings-section">
+        <h2>Sicherheit</h2>
+        <p class="settings-hint" id="lockStatusHint">Keine PIN-Sperre eingerichtet. Schützt die Ansicht bei kurzem Unbeobachtetsein des Geräts (die Daten im Browser selbst bleiben dabei unverschlüsselt).</p>
+        <button id="lockSetupBtn" class="btn btn--ghost btn--block" type="button">PIN-Sperre einrichten</button>
+        <button id="lockChangeBtn" class="btn btn--ghost btn--block" type="button" hidden>PIN ändern</button>
+        <button id="lockDisableBtn" class="btn btn--ghost btn--block" type="button" hidden>PIN-Sperre deaktivieren</button>
+        <div id="lockTimeoutWrap" hidden style="margin-top:14px;">
+          <div class="involved__label">Automatisch sperren nach</div>
+          <div id="lockTimeoutOptions" class="segmented" role="radiogroup" aria-label="Sperrverzögerung"></div>
+        </div>
+      </section>
+
+      <section class="settings-section">
         <h2>Hilfe</h2>
         <button id="showOnboardingBtn" class="btn btn--ghost btn--block" type="button">Einführung erneut anzeigen</button>
       </section>
 
       <section class="settings-section">
+        <h2>Textvorlagen</h2>
+        <p class="settings-hint">Eigene Kurztexte, die du beim Erfassen per Tipp einfügen kannst (z. B. "Vitalzeichen kontrolliert, unauffällig.").</p>
+        <div id="templateList" class="shift-photo-list"></div>
+        <button id="addTemplateBtn" class="btn btn--ghost btn--block" type="button">+ Vorlage hinzufügen</button>
+      </section>
+
+      <section class="settings-section">
+        <h2>Patienten-Modus</h2>
+        <p class="settings-hint">Diese Listen stehen dir beim Erfassen "Nach Patient" zur Auswahl – frei anpassbar.</p>
+
+        <div class="patient-config-block">
+          <div class="patient-config-block__head">Aufwand-Stufen</div>
+          <div id="effortLevelList" class="option-list"></div>
+          <button id="addEffortLevelBtn" class="btn btn--ghost btn--small" type="button">+ Stufe</button>
+        </div>
+
+        <div class="patient-config-block">
+          <div class="patient-config-block__head">Zeitaufwand-Stufen</div>
+          <div id="timeLevelList" class="option-list"></div>
+          <button id="addTimeLevelBtn" class="btn btn--ghost btn--small" type="button">+ Stufe</button>
+        </div>
+
+        <div class="patient-config-block">
+          <div class="patient-config-block__head">Medikamente</div>
+          <div id="medicationList" class="option-list"></div>
+          <button id="addMedicationBtn" class="btn btn--ghost btn--small" type="button">+ Medikament</button>
+        </div>
+
+        <div class="patient-config-block">
+          <div class="patient-config-block__head">Messungen</div>
+          <div id="measurementTypeList" class="option-list"></div>
+          <button id="addMeasurementTypeBtn" class="btn btn--ghost btn--small" type="button">+ Messung</button>
+        </div>
+      </section>
+
+      <section class="settings-section">
         <h2>Daten</h2>
+        <div class="export-range" id="exportRangeWrap">
+          <div class="involved__label">Zeitraum für Export (optional)</div>
+          <div class="export-range__row">
+            <input type="date" id="exportFromDate" aria-label="Von Datum">
+            <span class="export-range__sep">–</span>
+            <input type="date" id="exportToDate" aria-label="Bis Datum">
+            <button type="button" class="link-btn" id="exportRangeClear">Leeren</button>
+          </div>
+          <p class="settings-hint">Leer lassen, um alle Daten zu exportieren. Gilt für JSON- und Word-Export.</p>
+        </div>
         <button id="exportBtn" class="btn btn--ghost btn--block" type="button">Daten exportieren (JSON)</button>
         <p class="settings-hint">Erstellt zwei Dateien: das JSON (Einträge, Kontakte, Kalender) sowie, falls Schicht-Fotos vorhanden sind, ein separates ZIP mit den Fotos.</p>
         <button id="exportWordBtn" class="btn btn--ghost btn--block" type="button">Protokoll als Word exportieren (.docx)</button>
@@ -174,9 +273,11 @@
   </nav>
 
   <div id="toast" class="toast" hidden></div>
+  <div id="undoToast" class="undo-toast" hidden></div>
   <div id="modalRoot"></div>
   <div id="onboardingRoot"></div>
 </div>
+<div id="lockRoot"></div>
 
 <script src="app.js"></script>
 </body>
