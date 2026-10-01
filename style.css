@@ -537,6 +537,23 @@ main#views{
 .nav-btn__icon{ font-size: 19px; line-height: 1; }
 .nav-btn.is-active{ color: var(--primary); }
 
+/* "Neu" optisch hervorheben: erhöhtes, farbig gefülltes Icon-Badge statt
+   einem reinen Text-Icon wie die übrigen vier Reiter – signalisiert, dass
+   das die primäre, meistgenutzte Aktion ist. Fixe Header-Token (nicht
+   --primary), damit der Kontrast auch im Dunkelmodus stimmt. */
+.nav-btn[data-nav="start"] .nav-btn__icon{
+  display: flex; align-items: center; justify-content: center;
+  width: 36px; height: 36px;
+  margin-top: -16px;
+  border-radius: 50%;
+  background: var(--header-bg);
+  color: var(--header-fg);
+  font-size: 17px;
+  box-shadow: 0 4px 10px rgba(0,0,0,.2);
+}
+.nav-btn[data-nav="start"]{ color: var(--text); }
+.nav-btn[data-nav="start"].is-active{ color: var(--primary); }
+
 /* ---------- Toast ---------- */
 .toast{
   position: fixed;

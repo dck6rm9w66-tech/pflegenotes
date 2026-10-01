@@ -62,6 +62,12 @@
         { id: "meas_spo2", name: "Sättigung", unit: "%" },
         { id: "meas_bz", name: "Blutzucker", unit: "mg/dl" }
       ],
+      placeholders: [
+        { id: "ph_person", name: "Person" },
+        { id: "ph_hashtag", name: "Hashtag" },
+        { id: "ph_thema", name: "Thema" },
+        { id: "ph_zimmer", name: "Zimmer" }
+      ],
       settings: { theme: "system", lastShiftType: "Früh", lastEntryMode: "shift" }
     };
   }
@@ -90,6 +96,7 @@
       parsed.timeLevels = parsed.timeLevels || d.timeLevels;
       parsed.medications = parsed.medications || d.medications;
       parsed.measurementTypes = parsed.measurementTypes || d.measurementTypes;
+      parsed.placeholders = parsed.placeholders || d.placeholders;
       parsed.settings = parsed.settings || d.settings;
       if (!parsed.settings.lastEntryMode) parsed.settings.lastEntryMode = "shift";
       return parsed;
@@ -1230,18 +1237,39 @@
 
   function openTemplateModal(template) {
     var isNew = !template;
+    var placeholderChipsHtml = (state.placeholders || []).map(function (ph) {
+      return '<button type="button" class="chip chip--ghost" data-insert-placeholder="' + esc(ph.name) + '">{' + esc(ph.name) + '}</button>';
+    }).join("") || '<span class="category-empty">Noch keine Platzhalter – unter „Mehr" anlegen.</span>';
+
     var sheet = openModal(isNew ? "Vorlage hinzufügen" : "Vorlage bearbeiten", '' +
       '<div class="modal-field"><label for="templateNameInput">Name (optional, auch mit Emoji)</label>' +
       '<input type="text" id="templateNameInput" placeholder="z. B. 🩹 Wundversorgung" value="' + esc(template && template.name ? template.name : "") + '"></div>' +
       '<div class="modal-field"><label for="templateTextInput">Text</label>' +
       '<textarea id="templateTextInput" placeholder="z. B. Vitalzeichen kontrolliert, unauffällig.">' + esc(template ? template.text : "") + '</textarea>' +
-      '<p class="settings-hint" style="margin-top:6px; margin-bottom:0;">Platzhalter möglich: <code>{Person}</code> und <code>{Hashtag}</code> lassen dich direkt auswählen; jeder andere <code>{Platzhalter}</code> (z. B. <code>{Thema}</code>) wird beim Einfügen markiert, um ihn zu überschreiben.</p>' +
+      '<div class="involved__label" style="margin-top:12px;">Platzhalter einfügen</div>' +
+      '<div class="chip-row" id="templatePlaceholderChips">' + placeholderChipsHtml + '</div>' +
+      '<p class="settings-hint" style="margin-top:8px; margin-bottom:0;"><code>{Person}</code> und <code>{Hashtag}</code> lassen dich beim Einfügen in den Eintrag direkt auswählen; jeder andere Platzhalter wird markiert, um ihn zu überschreiben. Unter „Mehr" frei editierbar.</p>' +
       '</div>' +
       '<div class="modal-actions">' +
         '<button type="button" class="btn btn--ghost" data-close-modal>Abbrechen</button>' +
         '<button type="button" class="btn btn--primary" id="templateSaveBtn">Speichern</button>' +
       '</div>' +
       (isNew ? "" : '<button type="button" class="btn btn--danger btn--block" id="templateDeleteBtn" style="margin-top:10px;">Vorlage löschen</button>'));
+
+    sheet.querySelectorAll("#templatePlaceholderChips [data-insert-placeholder]").forEach(function (chip) {
+      chip.addEventListener("click", function () {
+        var ta = sheet.querySelector("#templateTextInput");
+        var start = typeof ta.selectionStart === "number" ? ta.selectionStart : ta.value.length;
+        var end = typeof ta.selectionEnd === "number" ? ta.selectionEnd : ta.value.length;
+        var before = ta.value.slice(0, start);
+        var prefix = before.length && !/\s$/.test(before) ? " " : "";
+        var token = prefix + "{" + chip.dataset.insertPlaceholder + "}";
+        ta.value = before + token + ta.value.slice(end);
+        var pos = start + token.length;
+        ta.focus();
+        ta.setSelectionRange(pos, pos);
+      });
+    });
 
     sheet.querySelector("#templateSaveBtn").addEventListener("click", function () {
       var name = sheet.querySelector("#templateNameInput").value.trim();
@@ -1370,6 +1398,7 @@
     document.getElementById("addTimeLevelBtn").addEventListener("click", function () { openOptionModal("time", null); });
     document.getElementById("addMedicationBtn").addEventListener("click", function () { openOptionModal("medication", null); });
     document.getElementById("addMeasurementTypeBtn").addEventListener("click", function () { openOptionModal("measurement", null); });
+    document.getElementById("addPlaceholderBtn").addEventListener("click", function () { openOptionModal("placeholderVar", null); });
     document.getElementById("hashtagStatsBtn").addEventListener("click", openHashtagStatsModal);
     document.getElementById("handoverBtn").addEventListener("click", openHandoverModal);
     document.getElementById("lockSetupBtn").addEventListener("click", openPinSetupModal);
@@ -2110,7 +2139,8 @@
     effort: { stateKey: "effortLevels", idPrefix: "eff", listElId: "effortLevelList", fields: [{ key: "label", label: "Bezeichnung", placeholder: "z. B. Mittel" }] },
     time: { stateKey: "timeLevels", idPrefix: "zeit", listElId: "timeLevelList", fields: [{ key: "label", label: "Bezeichnung", placeholder: "z. B. 5–15 Min" }] },
     medication: { stateKey: "medications", idPrefix: "med", listElId: "medicationList", fields: [{ key: "name", label: "Name", placeholder: "z. B. Paracetamol" }] },
-    measurement: { stateKey: "measurementTypes", idPrefix: "meas", listElId: "measurementTypeList", fields: [{ key: "name", label: "Name", placeholder: "z. B. Blutdruck" }, { key: "unit", label: "Einheit (optional)", placeholder: "z. B. mmHg" }] }
+    measurement: { stateKey: "measurementTypes", idPrefix: "meas", listElId: "measurementTypeList", fields: [{ key: "name", label: "Name", placeholder: "z. B. Blutdruck" }, { key: "unit", label: "Einheit (optional)", placeholder: "z. B. mmHg" }] },
+    placeholderVar: { stateKey: "placeholders", idPrefix: "ph", listElId: "placeholderList", fields: [{ key: "name", label: "Name", placeholder: "z. B. Zimmer" }] }
   };
 
   function optionDisplayLabel(cfg, item) {
@@ -3079,6 +3109,7 @@
     renderOptionList("time");
     renderOptionList("medication");
     renderOptionList("measurement");
+    renderOptionList("placeholderVar");
   }
 
   function renderMehrThemeOptions() {
@@ -3676,6 +3707,7 @@
       timeLevels: state.timeLevels,
       medications: state.medications,
       measurementTypes: state.measurementTypes,
+      placeholders: state.placeholders,
       settings: state.settings,
       _meta: {
         exportedAt: new Date().toISOString(),
@@ -3828,6 +3860,7 @@
               timeLevels: Array.isArray(finalImported.timeLevels) && finalImported.timeLevels.length ? finalImported.timeLevels : defaultState().timeLevels,
               medications: Array.isArray(finalImported.medications) ? finalImported.medications : defaultState().medications,
               measurementTypes: Array.isArray(finalImported.measurementTypes) && finalImported.measurementTypes.length ? finalImported.measurementTypes : defaultState().measurementTypes,
+              placeholders: Array.isArray(finalImported.placeholders) && finalImported.placeholders.length ? finalImported.placeholders : defaultState().placeholders,
               settings: finalImported.settings || defaultState().settings
             };
             persist();
@@ -3859,6 +3892,7 @@
     state.timeLevels = mergeArray(state.timeLevels, imported.timeLevels);
     state.medications = mergeArray(state.medications, imported.medications);
     state.measurementTypes = mergeArray(state.measurementTypes, imported.measurementTypes);
+    state.placeholders = mergeArray(state.placeholders, imported.placeholders);
     persist();
     refreshAllViews();
     toast("Daten zusammengeführt");
