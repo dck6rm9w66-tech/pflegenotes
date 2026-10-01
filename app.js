@@ -28,11 +28,14 @@
       entries: [],
       shifts: [],
       templates: [
-        { id: "tpl_vital", text: "Vitalzeichen kontrolliert, unauffällig." },
-        { id: "tpl_med", text: "Medikamente verabreicht wie verordnet." },
-        { id: "tpl_rundgang", text: "Rundgang durchgeführt, keine Auffälligkeiten." },
-        { id: "tpl_schlaeft", text: "Patient/in schläft." },
-        { id: "tpl_arzt", text: "Arzt/Ärztin informiert." }
+        { id: "tpl_vital", name: "✅ Vitalzeichen", text: "Vitalzeichen kontrolliert, unauffällig." },
+        { id: "tpl_med", name: "💊 Medikamente verabreicht", text: "Medikamente verabreicht wie verordnet." },
+        { id: "tpl_rundgang", name: "🚶 Rundgang", text: "Rundgang durchgeführt, keine Auffälligkeiten." },
+        { id: "tpl_schlaeft", name: "😴 Schläft", text: "Patient/in schläft." },
+        { id: "tpl_arzt", name: "👨‍⚕️ Arzt informiert", text: "{Person} informiert." },
+        { id: "tpl_ruecksprache", name: "🗣️ Rücksprache", text: "Rücksprache mit {Person} gehalten bezüglich {Thema}." },
+        { id: "tpl_wunde", name: "🩹 Wundversorgung", text: "Wundversorgung durchgeführt, Wunde reizlos. {Hashtag}" },
+        { id: "tpl_sturz", name: "⚠️ Sturzereignis", text: "Sturzereignis, {Person} verständigt. {Hashtag}" }
       ],
       patients: [],
       effortLevels: [
@@ -979,7 +982,8 @@
   var ui = {
     shift: { date: todayKey(), type: "Früh" },
     selectedPersonIds: [],
-    entryTimestamp: new Date()
+    entryTimestamp: new Date(),
+    entryPhotos: []
   };
 
   function renderShiftBar() {
@@ -1067,6 +1071,11 @@
   }
 
   // ---- Schnelltext-Vorlagen: eigene Kurzphrasen, per Tipp einfügbar ----
+  function templateChipLabel(t) {
+    if (t.name && t.name.trim()) return t.name.trim();
+    return t.text.length > 30 ? t.text.slice(0, 28) + "…" : t.text;
+  }
+
   function renderTemplateChips() {
     var wrap = document.getElementById("templateChips");
     var templates = state.templates || [];
@@ -1075,24 +1084,126 @@
       return;
     }
     wrap.innerHTML = templates.map(function (t) {
-      var label = t.text.length > 30 ? t.text.slice(0, 28) + "…" : t.text;
-      return '<button type="button" class="chip" style="--chip-color:var(--primary)" data-template="' + t.id + '">' + esc(label) + "</button>";
+      return '<button type="button" class="chip" style="--chip-color:var(--primary)" data-template="' + t.id + '" title="' + esc(t.text) + '">' + esc(templateChipLabel(t)) + "</button>";
     }).join("");
     wrap.querySelectorAll("[data-template]").forEach(function (chip) {
       chip.addEventListener("click", function () {
         var t = templates.filter(function (x) { return x.id === chip.dataset.template; })[0];
-        if (t) insertTemplateIntoTextarea(t.text);
+        if (t) insertTemplateIntoTextarea(document.getElementById("entryText"), t.text, {
+          onPersonInvolved: function (p) {
+            if (ui.selectedPersonIds.indexOf(p.id) === -1) ui.selectedPersonIds.push(p.id);
+            renderPersonChips();
+          }
+        });
       });
     });
   }
 
-  function insertTemplateIntoTextarea(phrase) {
-    var ta = document.getElementById("entryText");
+  // ---- Platzhalter in Vorlagen: {Person}, {Hashtag} werden "smart" über
+  // eine Auswahl aufgelöst (inkl. Verknüpfung mit "Beteiligt"); jeder andere
+  // {Platzhalter} wird nach dem Einfügen einfach markiert, damit man sofort
+  // darüberschreiben kann. Bewusst textarea-agnostisch (Parameter `ta`) und
+  // mit `hooks.onPersonInvolved`, damit dieselbe Logik im Schicht- wie im
+  // Patienten-Formular funktioniert (dort landet die Person z. B. in
+  // patientUi.involvedPeople statt in ui.selectedPersonIds). ----
+  var PLACEHOLDER_RE = /\{([^{}]+)\}/;
+  function findPlaceholder(text, fromIndex) {
+    var from = fromIndex || 0;
+    var sub = text.slice(from);
+    var m = PLACEHOLDER_RE.exec(sub);
+    if (!m) return null;
+    var start = from + m.index;
+    return { start: start, end: start + m[0].length, label: m[1].trim() };
+  }
+
+  function applyPlaceholderValue(ta, match, value) {
+    var text = ta.value;
+    ta.value = text.slice(0, match.start) + value + text.slice(match.end);
+    if (ta.id === "entryText") saveDraft();
+    if (ta.dataset && ta.dataset.role === "patient-text") patientUi.text = ta.value;
+    return match.start + value.length;
+  }
+
+  function resolveNextPlaceholder(ta, fromIndex, hooks) {
+    var m = findPlaceholder(ta.value, fromIndex);
+    if (!m) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); return; }
+    var label = m.label.toLowerCase();
+    if (label === "person" || label === "personen" || label === "name") {
+      openPlaceholderPersonPicker(ta, m, hooks);
+    } else if (label === "hashtag" || label === "tag" || label === "stichwort") {
+      openPlaceholderHashtagPicker(ta, m, hooks);
+    } else {
+      ta.focus();
+      ta.setSelectionRange(m.start, m.end);
+    }
+  }
+
+  function openPlaceholderPersonPicker(ta, match, hooks) {
+    var peopleHtml = state.people.map(function (p) {
+      var col = categoryColorForPerson(p.id) || "#8A9793";
+      return '<button type="button" class="chip" style="--chip-color:' + col + '" data-pick-person="' + p.id + '"><span class="chip__dot"></span>' + esc(p.name) + '</button>';
+    }).join("");
+    var sheet = openModal("Person einsetzen", '' +
+      '<p class="modal-text">Ersetzt „{' + esc(match.label) + '}" im Text und markiert die Person direkt als beteiligt.</p>' +
+      '<div class="chip-row">' + peopleHtml +
+        '<button type="button" class="chip chip--add" id="placeholderAddPersonBtn">+ Person</button>' +
+      '</div>' +
+      '<button type="button" class="btn btn--ghost btn--block" data-close-modal style="margin-top:16px;">Abbrechen (Platzhalter behalten)</button>');
+
+    function pick(p) {
+      var newPos = applyPlaceholderValue(ta, match, p.name);
+      if (hooks && hooks.onPersonInvolved) hooks.onPersonInvolved(p);
+      closeModal();
+      resolveNextPlaceholder(ta, newPos, hooks);
+    }
+    sheet.querySelectorAll("[data-pick-person]").forEach(function (chip) {
+      chip.addEventListener("click", function () {
+        var p = getPerson(chip.dataset.pickPerson);
+        if (p) pick(p);
+      });
+    });
+    sheet.querySelector("#placeholderAddPersonBtn").addEventListener("click", function () {
+      openPersonModal(null, { onCreated: pick });
+    });
+  }
+
+  function openPlaceholderHashtagPicker(ta, match, hooks) {
+    var tags = getTopHashtags(12);
+    var tagsHtml = tags.map(function (t) {
+      return '<button type="button" class="chip" style="--chip-color:var(--accent)" data-pick-tag="' + esc(t) + '">#' + esc(t) + '</button>';
+    }).join("");
+    var sheet = openModal("Hashtag einsetzen", '' +
+      (tags.length ? '<div class="chip-row" style="margin-bottom:16px;">' + tagsHtml + '</div>' : '') +
+      '<div class="modal-field"><label for="placeholderTagInput">Oder neuen Hashtag eingeben</label>' +
+      '<input type="text" id="placeholderTagInput" placeholder="z. B. Station3"></div>' +
+      '<div class="modal-actions">' +
+        '<button type="button" class="btn btn--ghost" data-close-modal>Abbrechen (Platzhalter behalten)</button>' +
+        '<button type="button" class="btn btn--primary" id="placeholderTagSaveBtn">Einsetzen</button>' +
+      '</div>');
+
+    function pick(tag) {
+      var newPos = applyPlaceholderValue(ta, match, "#" + tag);
+      closeModal();
+      resolveNextPlaceholder(ta, newPos, hooks);
+    }
+    sheet.querySelectorAll("[data-pick-tag]").forEach(function (chip) {
+      chip.addEventListener("click", function () { pick(chip.dataset.pickTag); });
+    });
+    sheet.querySelector("#placeholderTagSaveBtn").addEventListener("click", function () {
+      var raw = sheet.querySelector("#placeholderTagInput").value.trim().replace(/^#/, "").replace(/\s+/g, "");
+      if (!raw) { toast("Bitte einen Hashtag eingeben."); return; }
+      pick(raw);
+    });
+  }
+
+  function insertTemplateIntoTextarea(ta, phrase, hooks) {
     var text = ta.value;
     var sep = text.length && !/\s$/.test(text) ? " " : "";
+    var insertStart = text.length + sep.length;
     ta.value = text + sep + phrase + " ";
-    ta.focus();
-    saveDraft();
+    if (ta.id === "entryText") saveDraft();
+    if (ta.dataset && ta.dataset.role === "patient-text") patientUi.text = ta.value;
+    resolveNextPlaceholder(ta, insertStart, hooks);
   }
 
   function renderTemplateList() {
@@ -1103,7 +1214,10 @@
       return;
     }
     wrap.innerHTML = templates.map(function (t) {
-      return '<div class="person-row"><div class="person-row__name">' + esc(t.text) + '</div>' +
+      var titleHtml = t.name && t.name.trim()
+        ? esc(t.name) + '<span class="person-row__note">' + esc(t.text) + '</span>'
+        : esc(t.text);
+      return '<div class="person-row"><div class="person-row__name">' + titleHtml + '</div>' +
         '<button type="button" class="person-row__edit" data-edit-template="' + t.id + '" aria-label="Vorlage bearbeiten">✎</button></div>';
     }).join("");
     wrap.querySelectorAll("[data-edit-template]").forEach(function (btn) {
@@ -1117,8 +1231,12 @@
   function openTemplateModal(template) {
     var isNew = !template;
     var sheet = openModal(isNew ? "Vorlage hinzufügen" : "Vorlage bearbeiten", '' +
+      '<div class="modal-field"><label for="templateNameInput">Name (optional, auch mit Emoji)</label>' +
+      '<input type="text" id="templateNameInput" placeholder="z. B. 🩹 Wundversorgung" value="' + esc(template && template.name ? template.name : "") + '"></div>' +
       '<div class="modal-field"><label for="templateTextInput">Text</label>' +
-      '<textarea id="templateTextInput" placeholder="z. B. Vitalzeichen kontrolliert, unauffällig.">' + esc(template ? template.text : "") + '</textarea></div>' +
+      '<textarea id="templateTextInput" placeholder="z. B. Vitalzeichen kontrolliert, unauffällig.">' + esc(template ? template.text : "") + '</textarea>' +
+      '<p class="settings-hint" style="margin-top:6px; margin-bottom:0;">Platzhalter möglich: <code>{Person}</code> und <code>{Hashtag}</code> lassen dich direkt auswählen; jeder andere <code>{Platzhalter}</code> (z. B. <code>{Thema}</code>) wird beim Einfügen markiert, um ihn zu überschreiben.</p>' +
+      '</div>' +
       '<div class="modal-actions">' +
         '<button type="button" class="btn btn--ghost" data-close-modal>Abbrechen</button>' +
         '<button type="button" class="btn btn--primary" id="templateSaveBtn">Speichern</button>' +
@@ -1126,12 +1244,14 @@
       (isNew ? "" : '<button type="button" class="btn btn--danger btn--block" id="templateDeleteBtn" style="margin-top:10px;">Vorlage löschen</button>'));
 
     sheet.querySelector("#templateSaveBtn").addEventListener("click", function () {
+      var name = sheet.querySelector("#templateNameInput").value.trim();
       var text = sheet.querySelector("#templateTextInput").value.trim();
       if (!text) { toast("Bitte einen Text eingeben."); return; }
       if (isNew) {
-        state.templates.push({ id: uid("tpl"), text: text });
+        state.templates.push({ id: uid("tpl"), name: name, text: text });
         toast("Vorlage hinzugefügt");
       } else {
+        template.name = name;
         template.text = text;
         toast("Vorlage aktualisiert");
       }
@@ -1173,6 +1293,7 @@
     renderPersonChips();
     renderHashtagSuggestions();
     renderTemplateChips();
+    renderEntryPhotosRow();
     applyEntryModeUI(state.settings.lastEntryMode || "shift");
 
     // Navigation
@@ -1324,16 +1445,23 @@
       personIds: ui.selectedPersonIds.slice(),
       hashtags: extractHashtags(text),
       shiftDate: ui.shift.date,
-      shiftType: ui.shift.type
+      shiftType: ui.shift.type,
+      photos: ui.entryPhotos.slice()
     });
     persist();
     clearDraft();
 
     textarea.value = "";
     ui.entryTimestamp = new Date();
+    ui.entryPhotos = [];
     renderTimestampLabel();
     renderHashtagSuggestions();
+    renderEntryPhotosRow();
     toast("Gespeichert");
+  }
+
+  function renderEntryPhotosRow() {
+    renderEntryPhotosUI(document, ui.entryPhotos, renderEntryPhotosRow);
   }
 
   /* ---------------------------------------------------------------------
@@ -1460,6 +1588,11 @@
         });
         if (pills.length) structuredHTML = '<div class="entry-item__structured">' + pills.join("") + '</div>';
       }
+      var entryPhotosHTML = (entry.photos && entry.photos.length)
+        ? '<div class="entry-item__photos">' + entry.photos.map(function (p) {
+            return '<img src="' + p.data + '" data-view-entry-photo="' + p.id + '" alt="">';
+          }).join("") + '</div>'
+        : '';
       html +=
         '<div class="entry-item" data-entry="' + entry.id + '">' +
           '<div class="entry-item__row" style="' + (accent ? "--entry-color:" + accent : "") + '" data-toggle="' + entry.id + '">' +
@@ -1468,6 +1601,7 @@
               patientHeaderHTML +
               (entry.text ? '<div class="entry-item__text">' + esc(entry.text) + '</div>' : '') +
               structuredHTML +
+              entryPhotosHTML +
               (peopleHTML ? '<div class="entry-item__people">' + peopleHTML + '</div>' : '') +
               (tagsHTML ? '<div class="entry-item__tags">' + tagsHTML + '</div>' : '') +
               photoLinkHTML +
@@ -1495,6 +1629,12 @@
         e.stopPropagation();
         var shift = state.shifts.filter(function (s) { return s.id === btn.dataset.viewShiftPhoto; })[0];
         if (shift) openShiftPhotoModal({ date: shift.date, type: shift.type });
+      });
+    });
+    container.querySelectorAll("[data-view-entry-photo]").forEach(function (img) {
+      img.addEventListener("click", function (e) {
+        e.stopPropagation();
+        openPhotoPreviewModal(img.getAttribute("src"));
       });
     });
     container.querySelectorAll("[data-edit]").forEach(function (btn) {
@@ -1532,6 +1672,7 @@
     if (!entry) return;
     var d = new Date(entry.timestamp);
     var selected = (entry.personIds || []).slice();
+    var editPhotos = (entry.photos || []).slice();
 
     var chips = "";
     state.categories.forEach(function (cat) {
@@ -1547,10 +1688,14 @@
       '<div class="modal-field"><label for="editTs">Zeitpunkt</label>' +
       '<input type="datetime-local" id="editTs" value="' + originalTsValue + '"></div>' +
       '<div class="modal-field"><label>Beteiligt</label><div class="chip-row" id="editChips">' + chips + '</div></div>' +
+      '<div class="modal-field"><label>Fotos</label><div data-role="photos-row" class="entry-photos-row"></div></div>' +
       '<div class="modal-actions">' +
         '<button type="button" class="btn btn--ghost" data-close-modal>Abbrechen</button>' +
         '<button type="button" class="btn btn--primary" id="editSaveBtn">Speichern</button>' +
       '</div>');
+
+    function rerenderEditPhotos() { renderEntryPhotosUI(sheet, editPhotos, rerenderEditPhotos); }
+    rerenderEditPhotos();
 
     sheet.querySelectorAll("#editChips .chip").forEach(function (chip) {
       chip.addEventListener("click", function () {
@@ -1571,6 +1716,7 @@
       if (tsVal && tsVal !== originalTsValue) entry.timestamp = new Date(tsVal).toISOString();
       entry.personIds = selected;
       entry.hashtags = extractHashtags(newText);
+      entry.photos = editPhotos.slice();
       persist();
       closeModal();
       renderLog();
@@ -1885,6 +2031,7 @@
           renderPersonChips();
         }
         toast("Person hinzugefügt");
+        if (opts.onCreated) opts.onCreated(p);
       } else {
         person.name = name;
         person.categoryId = categoryId;
@@ -2178,7 +2325,9 @@
     timeLevelId: null,
     medications: [],
     measurements: [],
-    involvedPeople: []
+    involvedPeople: [],
+    text: "",
+    photos: []
   };
 
   function renderPatientForm(targetId) {
@@ -2218,12 +2367,19 @@
     html += '<div class="involved"><div class="involved__label">Beteiligte Personen</div><div data-role="inv-rows"></div>' +
       '<div class="chip-row" data-role="inv-person-chips"></div></div>';
 
+    html += '<div class="involved"><div class="involved__label">Vorlagen</div><div class="chip-row" data-role="patient-template-chips"></div></div>';
+
     html += '<div class="involved"><div class="involved__label">Notiz (optional)</div>' +
-      '<textarea class="entry-textarea" rows="3" placeholder="Zusätzliche Notiz …" data-role="patient-text"></textarea></div>';
+      '<textarea class="entry-textarea" rows="3" placeholder="Zusätzliche Notiz …" data-role="patient-text">' + esc(patientUi.text) + '</textarea></div>';
+
+    html += '<div class="involved"><div class="involved__label">Fotos (optional)</div><div class="entry-photos-row" data-role="photos-row"></div></div>';
 
     html += '<div class="save-bar"><button type="button" class="btn btn--primary btn--block" data-role="save-patient-entry">Eintrag speichern</button></div>';
 
     root.innerHTML = html;
+
+    var patientTextEl = root.querySelector('[data-role="patient-text"]');
+    patientTextEl.addEventListener("input", function () { patientUi.text = patientTextEl.value; });
 
     if (!patient) {
       var pickWrap = root.querySelector('[data-role="patient-pick-chips"]');
@@ -2298,6 +2454,33 @@
       });
     });
     peopleWrap.querySelector('[data-role="quick-add-person"]').addEventListener("click", function () { openPersonModal(null); });
+
+    var tplWrap = root.querySelector('[data-role="patient-template-chips"]');
+    var templates = state.templates || [];
+    if (!templates.length) {
+      tplWrap.innerHTML = '<span class="category-empty">Noch keine Vorlagen – unter „Mehr“ anlegen.</span>';
+    } else {
+      tplWrap.innerHTML = templates.map(function (t) {
+        return '<button type="button" class="chip" style="--chip-color:var(--patient-accent)" data-template="' + t.id + '" title="' + esc(t.text) + '">' + esc(templateChipLabel(t)) + "</button>";
+      }).join("");
+      tplWrap.querySelectorAll("[data-template]").forEach(function (chip) {
+        chip.addEventListener("click", function () {
+          var t = templates.filter(function (x) { return x.id === chip.dataset.template; })[0];
+          if (!t) return;
+          var textEl = root.querySelector('[data-role="patient-text"]');
+          insertTemplateIntoTextarea(textEl, t.text, {
+            onPersonInvolved: function (p) {
+              if (!patientUi.involvedPeople.some(function (ip) { return ip.personId === p.id; })) {
+                patientUi.involvedPeople.push({ personId: p.id, role: "" });
+              }
+              renderPatientForm(targetId);
+            }
+          });
+        });
+      });
+    }
+
+    renderEntryPhotosUI(root, patientUi.photos, function () { renderPatientForm(targetId); });
 
     root.querySelector('[data-role="save-patient-entry"]').addEventListener("click", function () { savePatientEntry(targetId); });
   }
@@ -2421,7 +2604,9 @@
       timeLevelId: null,
       medications: [],
       measurements: [],
-      involvedPeople: []
+      involvedPeople: [],
+      text: "",
+      photos: []
     };
   }
 
@@ -2445,7 +2630,8 @@
       effortLevelId: patientUi.effortLevelId,
       timeLevelId: patientUi.timeLevelId,
       medications: patientUi.medications.filter(function (m) { return m.medId; }).map(function (m) { return { medId: m.medId, status: m.status, amount: m.amount || "" }; }),
-      measurements: patientUi.measurements.filter(function (m) { return m.measId; }).map(function (m) { return { measId: m.measId, value: m.value || "" }; })
+      measurements: patientUi.measurements.filter(function (m) { return m.measId; }).map(function (m) { return { measId: m.measId, value: m.value || "" }; }),
+      photos: patientUi.photos.slice()
     };
     state.entries.push(entry);
     persist();
@@ -2467,13 +2653,13 @@
       timeLevelId: entry.timeLevelId || null,
       medications: (entry.medications || []).map(function (m) { return { medId: m.medId, status: m.status, amount: m.amount }; }),
       measurements: (entry.measurements || []).map(function (m) { return { measId: m.measId, value: m.value }; }),
-      involvedPeople: (entry.personIds || []).map(function (pid) { return { personId: pid, role: (entry.personRoles || {})[pid] || "" }; })
+      involvedPeople: (entry.personIds || []).map(function (pid) { return { personId: pid, role: (entry.personRoles || {})[pid] || "" }; }),
+      text: entry.text || "",
+      photos: (entry.photos || []).slice()
     };
 
     var sheet = openModal("Patienten-Eintrag bearbeiten", '<div id="patientFormRootModal"></div>');
     renderPatientForm("patientFormRootModal");
-    var textEl = sheet.querySelector('[data-role="patient-text"]');
-    if (textEl) textEl.value = entry.text || "";
     var saveBtn = sheet.querySelector('[data-role="save-patient-entry"]');
     saveBtn.textContent = "Änderungen speichern";
     var freshSaveBtn = saveBtn.cloneNode(true);
@@ -2491,6 +2677,7 @@
       entry.personIds = patientUi.involvedPeople.map(function (r) { return r.personId; });
       entry.personRoles = patientUi.involvedPeople.reduce(function (acc, r) { if (r.role) acc[r.personId] = r.role; return acc; }, {});
       entry.hashtags = extractHashtags(entry.text);
+      entry.photos = patientUi.photos.slice();
       persist();
       patientUi = savedUi;
       closeModal();
@@ -2686,6 +2873,50 @@
         img.src = reader.result;
       };
       reader.readAsDataURL(file);
+    });
+  }
+
+  function openPhotoPreviewModal(src) {
+    openModal("Foto", '<img class="photo-preview" src="' + src + '" alt="">' +
+      '<button type="button" class="btn btn--ghost btn--block" data-close-modal style="margin-top:12px;">Schliessen</button>');
+  }
+
+  // Generische, mehrfach verwendbare Foto-Anhang-Komponente für Einträge
+  // (Schicht- wie Patienten-Modus, sowohl auf der Start-Seite als auch in
+  // Bearbeiten-Modals). `photosArray` (Array von {id, data}) wird direkt
+  // mutiert; `onChange` löst ein Re-Rendering des jeweiligen Formulars aus.
+  // Root-gescopt, damit mehrere Instanzen gleichzeitig im DOM unschädlich
+  // sind (siehe Patienten-Formular).
+  function renderEntryPhotosUI(root, photosArray, onChange) {
+    var wrap = root.querySelector('[data-role="photos-row"]');
+    if (!wrap) return;
+    wrap.innerHTML = photosArray.map(function (p) {
+      return '<div class="entry-photo-item"><img src="' + p.data + '" data-view-photo="' + p.id + '" alt="">' +
+        '<button type="button" class="entry-photo-item__remove" data-remove-photo="' + p.id + '" aria-label="Foto entfernen">✕</button></div>';
+    }).join("") + '<label class="entry-photo-add" aria-label="Foto hinzufügen">+' +
+      '<input type="file" accept="image/*" capture="environment" multiple data-role="add-photo-input" hidden></label>';
+
+    wrap.querySelectorAll("[data-view-photo]").forEach(function (img) {
+      img.addEventListener("click", function () { openPhotoPreviewModal(img.getAttribute("src")); });
+    });
+    wrap.querySelectorAll("[data-remove-photo]").forEach(function (btn) {
+      btn.addEventListener("click", function (e) {
+        e.stopPropagation();
+        var idx = photosArray.findIndex(function (p) { return p.id === btn.dataset.removePhoto; });
+        if (idx !== -1) photosArray.splice(idx, 1);
+        onChange();
+      });
+    });
+    var input = wrap.querySelector('[data-role="add-photo-input"]');
+    input.addEventListener("change", function () {
+      var files = Array.prototype.slice.call(input.files || []);
+      if (!files.length) return;
+      Promise.all(files.map(function (f) { return fileToCompressedDataURL(f, 1280, 0.72); }))
+        .then(function (dataUrls) {
+          dataUrls.forEach(function (d) { photosArray.push({ id: uid("photo"), data: d }); });
+          onChange();
+        })
+        .catch(function (err) { toast(err.message || "Foto konnte nicht verarbeitet werden."); });
     });
   }
 
@@ -3054,7 +3285,7 @@
   var WTABLE_COL_TIME = 1250;
   var WTABLE_COL_TEXT = 8388; // Summe = 9638 twips = Satzspiegelbreite bei A4/2cm Rand
 
-  function wTableRowXml(entry) {
+  function wTableRowXml(entry, entryPhotoRelMap) {
     var d = new Date(entry.timestamp);
     var timeCell = '<w:tc><w:tcPr><w:tcW w:w="' + WTABLE_COL_TIME + '" w:type="dxa"/><w:vAlign w:val="top"/></w:tcPr>' +
       '<w:p><w:pPr><w:spacing w:before="60" w:after="60"/></w:pPr><w:r><w:rPr><w:b/></w:rPr><w:t xml:space="preserve">' + xmlEsc(formatTime(d)) + '</w:t></w:r></w:p></w:tc>';
@@ -3114,7 +3345,13 @@
         '<w:t xml:space="preserve">' + xmlEsc(tags.map(function (t) { return "#" + t; }).join("   ")) + '</w:t></w:r></w:p>'
       : '';
 
-    var textCell = '<w:tc><w:tcPr><w:tcW w:w="' + WTABLE_COL_TEXT + '" w:type="dxa"/></w:tcPr>' + patientPara + structuredPara + textPara + peoplePara + tagsPara + '</w:tc>';
+    var photosXml = "";
+    var entryImgs = entryPhotoRelMap ? (entryPhotoRelMap[entry.id] || []) : [];
+    if (entryImgs.length) {
+      photosXml = entryImgs.map(wImageXml).join("");
+    }
+
+    var textCell = '<w:tc><w:tcPr><w:tcW w:w="' + WTABLE_COL_TEXT + '" w:type="dxa"/></w:tcPr>' + patientPara + structuredPara + textPara + peoplePara + tagsPara + photosXml + '</w:tc>';
     return '<w:tr>' + timeCell + textCell + '</w:tr>';
   }
 
@@ -3126,14 +3363,14 @@
     '</w:tblBorders>';
   }
 
-  function wDayTableXml(dayEntries) {
+  function wDayTableXml(dayEntries, entryPhotoRelMap) {
     var header = '<w:tr><w:trPr><w:tblHeader/></w:trPr>' +
       '<w:tc><w:tcPr><w:tcW w:w="' + WTABLE_COL_TIME + '" w:type="dxa"/><w:shd w:val="clear" w:color="auto" w:fill="0F5C56"/></w:tcPr>' +
         '<w:p><w:pPr><w:spacing w:before="40" w:after="40"/></w:pPr><w:r><w:rPr><w:b/><w:color w:val="FFFFFF"/><w:sz w:val="18"/></w:rPr><w:t>Zeit</w:t></w:r></w:p></w:tc>' +
       '<w:tc><w:tcPr><w:tcW w:w="' + WTABLE_COL_TEXT + '" w:type="dxa"/><w:shd w:val="clear" w:color="auto" w:fill="0F5C56"/></w:tcPr>' +
         '<w:p><w:pPr><w:spacing w:before="40" w:after="40"/></w:pPr><w:r><w:rPr><w:b/><w:color w:val="FFFFFF"/><w:sz w:val="18"/></w:rPr><w:t>Ereignis</w:t></w:r></w:p></w:tc>' +
     '</w:tr>';
-    var rows = dayEntries.map(wTableRowXml).join("");
+    var rows = dayEntries.map(function (entry) { return wTableRowXml(entry, entryPhotoRelMap); }).join("");
     return '<w:tbl><w:tblPr><w:tblW w:w="0" w:type="auto"/>' + wTableBorderXml() + '<w:tblLayout w:type="fixed"/></w:tblPr>' +
       '<w:tblGrid><w:gridCol w:w="' + WTABLE_COL_TIME + '"/><w:gridCol w:w="' + WTABLE_COL_TEXT + '"/></w:tblGrid>' +
       header + rows + '</w:tbl>' +
@@ -3166,7 +3403,7 @@
       '<w:t xml:space="preserve">' + xmlEsc(text) + '</w:t></w:r></w:p>';
   }
 
-  function buildWordBodyXml(imageRelMap, range) {
+  function buildWordBodyXml(imageRelMap, range, entryPhotoRelMap) {
     var body = "";
     body += wHeadingXml("Schichtprotokoll", 1);
     body += '<w:p><w:pPr><w:spacing w:after="60"/></w:pPr><w:r><w:rPr><w:color w:val="5B6864"/><w:sz w:val="20"/></w:rPr>' +
@@ -3185,7 +3422,7 @@
     } else {
       var lastDay = null, dayBucket = [];
       var flushDay = function () {
-        if (dayBucket.length) { body += wDayTableXml(dayBucket); dayBucket = []; }
+        if (dayBucket.length) { body += wDayTableXml(dayBucket, entryPhotoRelMap); dayBucket = []; }
       };
       sorted.forEach(function (entry) {
         var key = dateToKey(new Date(entry.timestamp));
@@ -3229,22 +3466,53 @@
     var shiftsWithPhotos = state.shifts.filter(function (s) { return s.photo && dateInRange(s.date, range); })
       .slice().sort(function (a, b) { return a.date.localeCompare(b.date) || a.type.localeCompare(b.type); });
 
-    Promise.all(shiftsWithPhotos.map(function (s) { return getImageNaturalSize(s.photo); }))
+    // Eintrags-Fotos (Schicht- wie Patienten-Modus) der gefilterten Einträge
+    // separat einsammeln – landen kleiner direkt in der jeweiligen
+    // Tabellenzeile statt im Schichtfotos-Abschnitt.
+    var filteredEntriesForPhotos = range ? state.entries.filter(function (e) { return entryInRange(e, range); }) : state.entries;
+    var entryPhotoList = [];
+    filteredEntriesForPhotos.forEach(function (e) {
+      (e.photos || []).forEach(function (p) { entryPhotoList.push({ entry: e, photo: p }); });
+    });
+
+    var allPhotoSources = shiftsWithPhotos.map(function (s) { return s.photo; })
+      .concat(entryPhotoList.map(function (x) { return x.photo.data; }));
+
+    Promise.all(allPhotoSources.map(function (src) { return getImageNaturalSize(src); }))
       .then(function (sizes) {
         var MAX_W_PX = 580;  // ~6.1in, passt in den Satzspiegel bei A4
         var MAX_H_PX = 700;  // verhindert, dass Hochformat-Fotos die ganze Seite füllen
+        var ENTRY_MAX_W_PX = 260, ENTRY_MAX_H_PX = 260; // kleiner: sitzen in der Tabellenzelle
         var mediaFiles = [], relEntries = [], imageRelMap = [];
+        var relCounter = 1, docPrCounter = 10;
 
         shiftsWithPhotos.forEach(function (s, idx) {
           var nat = sizes[idx];
           var scale = Math.min(1, MAX_W_PX / nat.width, MAX_H_PX / nat.height);
           var emuW = Math.round(nat.width * scale * 9525);
           var emuH = Math.round(nat.height * scale * 9525);
-          var relId = "rIdImg" + (idx + 1);
-          var fileName = "image" + (idx + 1) + ".jpeg";
+          var relId = "rIdImg" + relCounter;
+          var fileName = "image" + relCounter + ".jpeg";
+          relCounter++;
           mediaFiles.push({ name: "word/media/" + fileName, data: dataUrlToBytes(s.photo) });
           relEntries.push('<Relationship Id="' + relId + '" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/' + fileName + '"/>');
-          imageRelMap.push({ shift: s, relId: relId, emuW: emuW, emuH: emuH, docPrId: idx + 10 });
+          imageRelMap.push({ shift: s, relId: relId, emuW: emuW, emuH: emuH, docPrId: docPrCounter++ });
+        });
+
+        var entryPhotoRelMap = {};
+        entryPhotoList.forEach(function (item, i) {
+          var nat = sizes[shiftsWithPhotos.length + i];
+          var scale = Math.min(1, ENTRY_MAX_W_PX / nat.width, ENTRY_MAX_H_PX / nat.height);
+          var emuW = Math.round(nat.width * scale * 9525);
+          var emuH = Math.round(nat.height * scale * 9525);
+          var relId = "rIdImg" + relCounter;
+          var fileName = "image" + relCounter + ".jpeg";
+          relCounter++;
+          mediaFiles.push({ name: "word/media/" + fileName, data: dataUrlToBytes(item.photo.data) });
+          relEntries.push('<Relationship Id="' + relId + '" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/' + fileName + '"/>');
+          var img = { relId: relId, emuW: emuW, emuH: emuH, docPrId: docPrCounter++ };
+          if (!entryPhotoRelMap[item.entry.id]) entryPhotoRelMap[item.entry.id] = [];
+          entryPhotoRelMap[item.entry.id].push(img);
         });
 
         var documentXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
@@ -3253,7 +3521,7 @@
           'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" ' +
           'xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture" ' +
           'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
-          '<w:body>' + buildWordBodyXml(imageRelMap, range) + '</w:body></w:document>';
+          '<w:body>' + buildWordBodyXml(imageRelMap, range, entryPhotoRelMap) + '</w:body></w:document>';
 
         relEntries.unshift('<Relationship Id="rIdStyles" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>');
         relEntries.unshift('<Relationship Id="rIdFooter" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer1.xml"/>');
