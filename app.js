@@ -10,7 +10,7 @@
   // Wird bei jeder ausgelieferten Version hochgezählt (auch in index.html bei
   // den Asset-Links) und in "Mehr" angezeigt – so lässt sich prüfen, ob der
   // Browser wirklich die neue Version geladen hat und nicht eine gecachte.
-  var APP_VERSION = "2026.10.02-c";
+  var APP_VERSION = "2026.10.02-d";
   var resetInProgress = false; // während eines Voll-Resets darf nichts mehr zurückgeschrieben werden
   var MONTHS = ["Januar","Februar","März","April","Mai","Juni","Juli","August","September","Oktober","November","Dezember"];
   var WEEKDAYS_LONG = ["Sonntag","Montag","Dienstag","Mittwoch","Donnerstag","Freitag","Samstag"];
@@ -74,6 +74,18 @@
         { id: "ph_thema", name: "Thema", options: [] },
         { id: "ph_ort", name: "Ort", options: [] }
       ],
+      // Verwaltete Hashtags (Tag immer kleingeschrieben, ohne #) mit optionaler
+      // ausführlicher Bedeutung; hiddenHashtags = gelöschte Tags, die noch im
+      // Text älterer Einträge stehen und deshalb nicht mehr vorgeschlagen werden.
+      hashtagDefs: [
+        { id: "ht_sturz", tag: "sturz", meaning: "Sturzereignis oder Beinahe-Sturz. Sturzprotokoll ausfüllen, Arzt und Leitung informieren, Verlauf in den folgenden Stunden beobachten." },
+        { id: "ht_schmerz", tag: "schmerz", meaning: "Schmerzen geäussert oder beobachtet. Lokalisation, Stärke und Massnahmen (Medikation, Lagerung) festhalten und die Wirkung danach prüfen." },
+        { id: "ht_fieber", tag: "fieber", meaning: "Erhöhte Körpertemperatur. Messwerte dokumentieren, Verlauf beobachten und bei Überschreiten der vereinbarten Grenzwerte den Arzt informieren." },
+        { id: "ht_blutdruck", tag: "blutdruck", meaning: "Auffälliger Blutdruck (zu hoch oder zu niedrig). Messwert, Zeitpunkt und weitere Massnahmen dokumentieren." },
+        { id: "ht_labor", tag: "labor", meaning: "Laborwerte betroffen (Abnahme, Befund oder Rücksprache). Auffällige Werte und die informierte Person festhalten." },
+        { id: "ht_rundgang", tag: "rundgang", meaning: "Routinerundgang durchgeführt, Zimmer und Patient/innen kontrolliert." }
+      ],
+      hiddenHashtags: [],
       settings: { theme: "system", lastShiftType: "Früh", lastEntryMode: "shift", shiftTypeManualDate: null }
     };
   }
@@ -158,6 +170,8 @@
       } else {
         parsed.placeholders = d.placeholders;
       }
+      parsed.hashtagDefs = Array.isArray(parsed.hashtagDefs) ? parsed.hashtagDefs : d.hashtagDefs;
+      parsed.hiddenHashtags = Array.isArray(parsed.hiddenHashtags) ? parsed.hiddenHashtags : [];
       parsed.settings = parsed.settings || d.settings;
       if (!parsed.settings.lastEntryMode) parsed.settings.lastEntryMode = "shift";
       // Migration dauerhaft sichern, statt sie bei jedem Laden erneut nur
@@ -399,6 +413,62 @@
     return typeof limit === "number" ? tags.slice(0, limit) : tags;
   }
 
+  /* ---- Verwaltete Hashtags: Definition + ausführliche Bedeutung ---- */
+  function hashtagKey(t) { return String(t || "").replace(/^#/, "").trim().toLowerCase(); }
+  function getHashtagDef(tag) {
+    var k = hashtagKey(tag);
+    for (var i = 0; i < state.hashtagDefs.length; i++) if (state.hashtagDefs[i].tag === k) return state.hashtagDefs[i];
+    return null;
+  }
+  function hashtagMeaning(tag) {
+    var d = getHashtagDef(tag);
+    return d && d.meaning ? String(d.meaning).trim() : "";
+  }
+  function isHashtagHidden(tag) { return state.hiddenHashtags.indexOf(hashtagKey(tag)) !== -1; }
+  // Vorschläge beim Erfassen: zuerst die verwalteten Hashtags, dann die
+  // häufig genutzten (ohne ausgeblendete) – ohne Doppelte.
+  function getSuggestedHashtags(limit) {
+    var seen = {}, out = [];
+    state.hashtagDefs.forEach(function (d) { if (!seen[d.tag]) { seen[d.tag] = true; out.push(d.tag); } });
+    getTopHashtags().forEach(function (t) {
+      if (!seen[t] && !isHashtagHidden(t)) { seen[t] = true; out.push(t); }
+    });
+    return typeof limit === "number" ? out.slice(0, limit) : out;
+  }
+  // Liste unter "Mehr": verwaltete + in Einträgen vorkommende (nicht ausgeblendete) Hashtags.
+  function getManagedHashtagList() {
+    var counts = getHashtagCounts();
+    var list = state.hashtagDefs.map(function (d) { return { tag: d.tag, def: d, count: counts[d.tag] || 0 }; });
+    var seen = {};
+    list.forEach(function (x) { seen[x.tag] = true; });
+    Object.keys(counts).filter(function (t) { return !seen[t] && !isHashtagHidden(t); })
+      .sort(function (a, b) { return counts[b] - counts[a] || a.localeCompare(b); })
+      .forEach(function (t) { list.push({ tag: t, def: null, count: counts[t] }); });
+    return list;
+  }
+  // Wird ein ausgeblendeter Hashtag erneut verwendet, taucht er wieder auf.
+  function noteHashtagsUsed(tags) {
+    (tags || []).forEach(function (t) {
+      var i = state.hiddenHashtags.indexOf(hashtagKey(t));
+      if (i !== -1) state.hiddenHashtags.splice(i, 1);
+    });
+  }
+  // Legende (Hashtag -> Bedeutung) nur für Hashtags, die in den übergebenen Einträgen vorkommen.
+  function collectHashtagLegend(entries) {
+    var seen = {}, out = [];
+    entries.forEach(function (e) {
+      (e.hashtags || []).forEach(function (t) {
+        var k = hashtagKey(t);
+        if (seen[k]) return;
+        seen[k] = true;
+        var m = hashtagMeaning(k);
+        if (m) out.push({ tag: k, meaning: m });
+      });
+    });
+    out.sort(function (a, b) { return a.tag.localeCompare(b.tag); });
+    return out;
+  }
+
   // ---- Übergabe-Zusammenfassung: kompakter Text der Einträge zum Vorlesen,
   // Kopieren oder Weiterleiten (automatische Foto-Notizen bleiben draussen) ----
   function keyToDate(key) {
@@ -473,6 +543,17 @@
         var p = getPatient(pid);
         var count = entries.filter(function (e) { return e.patientId === pid; }).length;
         lines.push("  • " + (p ? p.name : "Unbekannt") + " (" + count + (count === 1 ? " Eintrag" : " Einträge") + ")");
+      });
+    }
+
+    var legend = collectHashtagLegend(entries);
+    if (legend.length) {
+      lines.push("");
+      lines.push(DIV);
+      lines.push("HASHTAG-BEDEUTUNGEN");
+      lines.push(DIV);
+      legend.forEach(function (l) {
+        lines.push("#" + l.tag + " – " + l.meaning.replace(/\r?\n/g, "\n    "));
       });
     }
 
@@ -840,6 +921,16 @@
       ph.options = ph.options || [];
       options.forEach(function (o) { if (ph.options.indexOf(o) === -1) ph.options.push(o); });
     }
+    // Bedeutungen für die in den Demo-Einträgen verwendeten Hashtags (nur ergänzen, nichts überschreiben)
+    [
+      ["rücksprache", "Rücksprache mit Arzt, Leitung oder Team. Gesprächspartner, Thema und vereinbartes Vorgehen festhalten."],
+      ["entlassung", "Entlassung oder Entlassplanung betroffen. Offene Punkte (Medikamente, Hilfsmittel, Angehörige, Nachsorge) bis zur Übergabe klären."],
+      ["mobilisation", "Mobilisation durchgeführt oder geplant. Dauer, Hilfsmittel und Belastbarkeit der Person dokumentieren."]
+    ].forEach(function (pair) {
+      if (!getHashtagDef(pair[0])) state.hashtagDefs.push({ id: uid("ht"), tag: pair[0], meaning: pair[1] });
+      noteHashtagsUsed([pair[0]]);
+    });
+
     ensurePlaceholderOptions("Thema", ["Medikamentenplan", "Schmerzmanagement", "Entlassung", "Angehörigengespräch", "Mobilisation", "Wundversorgung"]);
     ensurePlaceholderOptions("Ort", ["Zimmer", "Bad", "Flur", "Aufenthaltsraum", "Röntgen", "OP-Vorbereitung", "Garten"]);
 
@@ -1422,13 +1513,13 @@
   // Getter-Funktionen bei den Platzhaltern: das Patientenformular wird
   // komplett neu gerendert, ein festgehaltener Element-Verweis wäre veraltet).
   function fillHashtagChips(wrap, getTa) {
-    var top = getTopHashtags(10);
+    var top = getSuggestedHashtags(12);
     if (!top.length) {
       wrap.innerHTML = '<span class="category-empty">Tippe im Text z. B. #Station3, #Zimmer12, #Sturz …</span>';
       return;
     }
     wrap.innerHTML = top.map(function (t) {
-      return '<button type="button" class="chip" style="--chip-color:var(--accent)" data-hashtag="' + esc(t) + '">#' + esc(t) + '</button>';
+      return '<button type="button" class="chip" style="--chip-color:var(--accent)" data-hashtag="' + esc(t) + '"' + (hashtagMeaning(t) ? ' title="' + esc(hashtagMeaning(t)) + '"' : '') + '>#' + esc(t) + '</button>';
     }).join("");
     wrap.querySelectorAll("[data-hashtag]").forEach(function (chip) {
       chip.addEventListener("click", function () { insertHashtagIntoTextarea(chip.dataset.hashtag, getTa); });
@@ -1582,9 +1673,9 @@
   }
 
   function openPlaceholderHashtagPicker(getTa, match, hooks) {
-    var tags = getTopHashtags(12);
+    var tags = getSuggestedHashtags(12);
     var tagsHtml = tags.map(function (t) {
-      return '<button type="button" class="chip" style="--chip-color:var(--accent)" data-pick-tag="' + esc(t) + '">#' + esc(t) + '</button>';
+      return '<button type="button" class="chip" style="--chip-color:var(--accent)" data-pick-tag="' + esc(t) + '"' + (hashtagMeaning(t) ? ' title="' + esc(hashtagMeaning(t)) + '"' : '') + '>#' + esc(t) + '</button>';
     }).join("");
     var sheet = openModal("Hashtag einsetzen", '' +
       (tags.length ? '<div class="chip-row" style="margin-bottom:16px;">' + tagsHtml + '</div>' : '') +
@@ -1852,6 +1943,7 @@
     document.getElementById("addMedicationBtn").addEventListener("click", function () { openOptionModal("medication", null); });
     document.getElementById("addMeasurementTypeBtn").addEventListener("click", function () { openOptionModal("measurement", null); });
     document.getElementById("addPlaceholderBtn").addEventListener("click", function () { openPlaceholderEditModal(null); });
+    document.getElementById("addHashtagBtn").addEventListener("click", function () { openHashtagEditModal(null); });
     document.getElementById("hashtagStatsBtn").addEventListener("click", openHashtagStatsModal);
     document.getElementById("handoverBtn").addEventListener("click", openHandoverModal);
     document.getElementById("lockSetupBtn").addEventListener("click", openPinSetupModal);
@@ -1931,6 +2023,7 @@
       shiftType: ui.shift.type,
       photos: ui.entryPhotos.slice()
     });
+    noteHashtagsUsed(extractHashtags(text));
     persist();
     clearDraft();
 
@@ -2236,6 +2329,7 @@
       if (tsVal && tsVal !== originalTsValue) entry.timestamp = new Date(tsVal).toISOString();
       entry.personIds = selected;
       entry.hashtags = extractHashtags(newText);
+      noteHashtagsUsed(entry.hashtags);
       entry.photos = editPhotos.slice();
       persist();
       closeModal();
@@ -2791,6 +2885,103 @@
     }
   }
 
+  /* ---------- Hashtags verwalten (mit ausführlicher Bedeutung) ---------- */
+  var HASHTAG_NAME_RE = /^[\p{L}\p{N}_-]+$/u;
+
+  function refreshAfterHashtagChange() {
+    renderHashtagList();
+    renderHashtagSuggestions();
+    refreshPatientFormOptionUI();
+  }
+
+  function renderHashtagList() {
+    var wrap = document.getElementById("hashtagList");
+    if (!wrap) return;
+    var list = getManagedHashtagList();
+    if (!list.length) { wrap.innerHTML = '<p class="category-empty">Noch keine Hashtags.</p>'; return; }
+    wrap.innerHTML = list.map(function (x) {
+      var meaning = x.def && x.def.meaning ? String(x.def.meaning).trim() : "";
+      var sub = meaning ? (meaning.length > 90 ? meaning.slice(0, 88) + "…" : meaning) : "Keine Bedeutung hinterlegt";
+      if (x.count) sub += " · " + x.count + "× verwendet";
+      return '<div class="option-row"><div class="option-row__label">#' + esc(x.tag) +
+        '<span class="person-row__note">' + esc(sub) + '</span></div>' +
+        '<button type="button" class="option-row__edit" data-edit-hashtag="' + esc(x.tag) + '" aria-label="Hashtag #' + esc(x.tag) + ' bearbeiten">✎</button></div>';
+    }).join("");
+    wrap.querySelectorAll("[data-edit-hashtag]").forEach(function (btn) {
+      btn.addEventListener("click", function () { openHashtagEditModal(btn.dataset.editHashtag); });
+    });
+  }
+
+  // tag === null: neuen Hashtag anlegen. Sonst bearbeiten; der Name selbst bleibt
+  // unveränderlich, weil er im Text bestehender Einträge steht (Umbenennen =
+  // neu anlegen + alten löschen).
+  function openHashtagEditModal(tag) {
+    var isNew = tag === null || tag === undefined;
+    var def = isNew ? null : getHashtagDef(tag);
+    var used = isNew ? 0 : (getHashtagCounts()[hashtagKey(tag)] || 0);
+    var sheet = openModal(isNew ? "Hashtag hinzufügen" : "Hashtag bearbeiten", '' +
+      '<div class="modal-field"><label for="htNameInput">Name</label>' +
+      '<input type="text" id="htNameInput" placeholder="z. B. Sturz" autocapitalize="none" value="' + esc(isNew ? "" : "#" + hashtagKey(tag)) + '"' + (isNew ? "" : " disabled") + '>' +
+      (isNew ? '' : '<p class="settings-hint" style="margin-top:6px; margin-bottom:0;">Der Name bleibt fest, weil er im Text bestehender Einträge steht. Zum Umbenennen neu anlegen und den alten löschen.</p>') +
+      '</div>' +
+      '<div class="modal-field"><label for="htMeaningInput">Detaillierte Bedeutung (optional)</label>' +
+      '<textarea id="htMeaningInput" rows="5" placeholder="Was bedeutet dieser Hashtag? Welches Vorgehen gilt?">' + esc(def && def.meaning ? def.meaning : "") + '</textarea>' +
+      '<p class="settings-hint" style="margin-top:6px; margin-bottom:0;">Wird in der Übergabe-Zusammenfassung und in den Exporten angezeigt, sobald der Hashtag vorkommt.</p>' +
+      '</div>' +
+      '<div class="modal-actions">' +
+        '<button type="button" class="btn btn--ghost" data-close-modal>Abbrechen</button>' +
+        '<button type="button" class="btn btn--primary" id="htSaveBtn">Speichern</button>' +
+      '</div>' +
+      (isNew ? "" : '<button type="button" class="btn btn--danger btn--block" id="htDeleteBtn" style="margin-top:10px;">Hashtag löschen</button>'));
+
+    sheet.querySelector("#htSaveBtn").addEventListener("click", function () {
+      var meaning = sheet.querySelector("#htMeaningInput").value.trim();
+      if (isNew) {
+        var key = hashtagKey(sheet.querySelector("#htNameInput").value);
+        if (!key) { toast("Bitte einen Namen eingeben."); return; }
+        if (!HASHTAG_NAME_RE.test(key)) { toast("Nur Buchstaben, Ziffern, _ und - erlaubt (keine Leerzeichen)."); return; }
+        if (getHashtagDef(key)) { toast("#" + key + " gibt es bereits."); return; }
+        state.hashtagDefs.push({ id: uid("ht"), tag: key, meaning: meaning });
+        noteHashtagsUsed([key]);
+        toast("Hashtag hinzugefügt");
+      } else if (def) {
+        def.meaning = meaning;
+        toast("Aktualisiert");
+      } else if (meaning) {
+        // bisher nur in Einträgen vorkommender Hashtag bekommt erstmals eine Bedeutung
+        state.hashtagDefs.push({ id: uid("ht"), tag: hashtagKey(tag), meaning: meaning });
+        toast("Bedeutung gespeichert");
+      }
+      persist();
+      closeModal();
+      refreshAfterHashtagChange();
+    });
+
+    if (!isNew) {
+      sheet.querySelector("#htDeleteBtn").addEventListener("click", function () {
+        var key = hashtagKey(tag);
+        var idx = state.hashtagDefs.findIndex(function (d) { return d.tag === key; });
+        var removed = idx !== -1 ? state.hashtagDefs.splice(idx, 1)[0] : null;
+        var wasHidden = state.hiddenHashtags.indexOf(key) !== -1;
+        // Kommt der Hashtag noch im Text von Einträgen vor, bleibt der Text unverändert;
+        // der Hashtag wird nur aus Liste und Vorschlägen ausgeblendet.
+        if (used && !wasHidden) state.hiddenHashtags.push(key);
+        persist();
+        closeModal();
+        refreshAfterHashtagChange();
+        showUndoToast("#" + key + " gelöscht" + (used ? " (bleibt in " + used + (used === 1 ? " Eintrag" : " Einträgen") + " im Text)" : ""), function () {
+          if (removed) state.hashtagDefs.splice(Math.min(idx, state.hashtagDefs.length), 0, removed);
+          if (!wasHidden) {
+            var h = state.hiddenHashtags.indexOf(key);
+            if (h !== -1) state.hiddenHashtags.splice(h, 1);
+          }
+          persist();
+          refreshAfterHashtagChange();
+        });
+      });
+    }
+  }
+
   /* ---------- Patient/innen (Stammdaten) ---------- */
   function renderPatientList() {
     var wrap = document.getElementById("patientList");
@@ -3286,6 +3477,7 @@
       photos: patientUi.photos.slice()
     };
     state.entries.push(entry);
+    noteHashtagsUsed(entry.hashtags);
     persist();
 
     resetPatientUi();
@@ -3331,6 +3523,7 @@
       entry.personIds = patientUi.involvedPeople.map(function (r) { return r.personId; });
       entry.personRoles = patientUi.involvedPeople.reduce(function (acc, r) { if (r.role) acc[r.personId] = r.role; return acc; }, {});
       entry.hashtags = extractHashtags(entry.text);
+      noteHashtagsUsed(entry.hashtags);
       entry.photos = patientUi.photos.slice();
       persist();
       patientUi = savedUi;
@@ -3734,6 +3927,7 @@
     renderOptionList("medication");
     renderOptionList("measurement");
     renderPlaceholderList();
+    renderHashtagList();
   }
 
   function renderMehrThemeOptions() {
@@ -4019,6 +4213,29 @@
     '</w:tblBorders>';
   }
 
+  // Legende: Hashtag -> ausführliche Bedeutung (nur für im Export vorkommende Hashtags)
+  function wHashtagLegendXml(rows) {
+    var C1 = 2200, C2 = WTABLE_COL_TIME + WTABLE_COL_TEXT - C1;
+    function head(w, label) {
+      return '<w:tc><w:tcPr><w:tcW w:w="' + w + '" w:type="dxa"/><w:shd w:val="clear" w:color="auto" w:fill="0F5C56"/></w:tcPr>' +
+        '<w:p><w:pPr><w:spacing w:before="40" w:after="40"/></w:pPr><w:r><w:rPr><w:b/><w:color w:val="FFFFFF"/><w:sz w:val="18"/></w:rPr><w:t>' + label + '</w:t></w:r></w:p></w:tc>';
+    }
+    var trs = rows.map(function (r) {
+      var paras = r.meaning.split(/\r?\n/).map(function (line) {
+        return '<w:p><w:pPr><w:spacing w:before="40" w:after="40"/></w:pPr><w:r><w:t xml:space="preserve">' + xmlEsc(line) + '</w:t></w:r></w:p>';
+      }).join("");
+      return '<w:tr>' +
+        '<w:tc><w:tcPr><w:tcW w:w="' + C1 + '" w:type="dxa"/></w:tcPr><w:p><w:pPr><w:spacing w:before="40" w:after="40"/></w:pPr>' +
+          '<w:r><w:rPr><w:b/><w:color w:val="0F5C56"/></w:rPr><w:t xml:space="preserve">#' + xmlEsc(r.tag) + '</w:t></w:r></w:p></w:tc>' +
+        '<w:tc><w:tcPr><w:tcW w:w="' + C2 + '" w:type="dxa"/></w:tcPr>' + paras + '</w:tc>' +
+      '</w:tr>';
+    }).join("");
+    return '<w:tbl><w:tblPr><w:tblW w:w="0" w:type="auto"/>' + wTableBorderXml() + '<w:tblLayout w:type="fixed"/></w:tblPr>' +
+      '<w:tblGrid><w:gridCol w:w="' + C1 + '"/><w:gridCol w:w="' + C2 + '"/></w:tblGrid>' +
+      '<w:tr><w:trPr><w:tblHeader/></w:trPr>' + head(C1, 'Hashtag') + head(C2, 'Bedeutung') + '</w:tr>' +
+      trs + '</w:tbl><w:p><w:pPr><w:spacing w:after="220"/></w:pPr></w:p>';
+  }
+
   function wDayTableXml(dayEntries, entryPhotoRelMap) {
     var header = '<w:tr><w:trPr><w:tblHeader/></w:trPr>' +
       '<w:tc><w:tcPr><w:tcW w:w="' + WTABLE_COL_TIME + '" w:type="dxa"/><w:shd w:val="clear" w:color="auto" w:fill="0F5C56"/></w:tcPr>' +
@@ -4090,6 +4307,12 @@
         dayBucket.push(entry);
       });
       flushDay();
+    }
+
+    var legendRows = collectHashtagLegend(sorted);
+    if (legendRows.length) {
+      body += wHeadingXml("Hashtag-Erklärungen", 2);
+      body += wHashtagLegendXml(legendRows);
     }
 
     body += wHeadingXml("Schichtfotos", 2);
@@ -4333,6 +4556,8 @@
       medications: state.medications,
       measurementTypes: state.measurementTypes,
       placeholders: state.placeholders,
+      hashtagDefs: state.hashtagDefs,
+      hiddenHashtags: state.hiddenHashtags,
       settings: state.settings,
       _meta: {
         exportedAt: new Date().toISOString(),
@@ -4486,6 +4711,8 @@
               medications: Array.isArray(finalImported.medications) ? finalImported.medications : defaultState().medications,
               measurementTypes: Array.isArray(finalImported.measurementTypes) && finalImported.measurementTypes.length ? finalImported.measurementTypes : defaultState().measurementTypes,
               placeholders: Array.isArray(finalImported.placeholders) && finalImported.placeholders.length ? finalImported.placeholders : defaultState().placeholders,
+              hashtagDefs: Array.isArray(finalImported.hashtagDefs) ? finalImported.hashtagDefs : defaultState().hashtagDefs,
+              hiddenHashtags: Array.isArray(finalImported.hiddenHashtags) ? finalImported.hiddenHashtags : [],
               settings: finalImported.settings || defaultState().settings
             };
             persist();
@@ -4518,6 +4745,17 @@
     state.medications = mergeArray(state.medications, imported.medications);
     state.measurementTypes = mergeArray(state.measurementTypes, imported.measurementTypes);
     state.placeholders = mergeArray(state.placeholders, imported.placeholders);
+    // Hashtags werden über den Tag (nicht die ID) zusammengeführt; die importierte Bedeutung hat Vorrang.
+    (imported.hashtagDefs || []).forEach(function (d) {
+      if (!d || !d.tag) return;
+      var ex = getHashtagDef(d.tag);
+      if (ex) { if (d.meaning) ex.meaning = d.meaning; }
+      else state.hashtagDefs.push({ id: d.id || uid("ht"), tag: hashtagKey(d.tag), meaning: d.meaning || "" });
+    });
+    (imported.hiddenHashtags || []).forEach(function (t) {
+      var k = hashtagKey(t);
+      if (state.hiddenHashtags.indexOf(k) === -1 && !getHashtagDef(k)) state.hiddenHashtags.push(k);
+    });
     persist();
     refreshAllViews();
     toast("Daten zusammengeführt");

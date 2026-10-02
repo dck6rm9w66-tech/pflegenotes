@@ -7,7 +7,7 @@
 <meta name="description" content="Schnelles Dokumentationstool für die Pflege – Situationen, Beteiligte, Kalender und Schichtfotos.">
 <meta name="theme-color" content="#0F5C56">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🩺</text></svg>">
-<link rel="stylesheet" href="style.css?v=2026.10.02-c">
+<link rel="stylesheet" href="style.css?v=2026.10.02-d">
 </head>
 <body>
 <div id="app">
@@ -209,6 +209,13 @@
       </section>
 
       <section class="settings-section">
+        <h2>Hashtags</h2>
+        <p class="settings-hint">Hashtags anlegen oder löschen und ihre Bedeutung ausführlich beschreiben. Die Bedeutung erscheint in der Übergabe-Zusammenfassung und in den Exporten (Word, JSON). Hashtags aus deinen Einträgen werden hier automatisch mit aufgelistet.</p>
+        <div id="hashtagList" class="option-list"></div>
+        <button id="addHashtagBtn" class="btn btn--ghost btn--small" type="button">+ Hashtag</button>
+      </section>
+
+      <section class="settings-section">
         <h2>Patienten-Modus</h2>
         <p class="settings-hint">Diese Listen stehen dir beim Erfassen "Nach Patient" zur Auswahl – frei anpassbar.</p>
 
@@ -293,6 +300,6 @@
 </div>
 <div id="lockRoot"></div>
 
-<script src="app.js?v=2026.10.02-c"></script>
+<script src="app.js?v=2026.10.02-d"></script>
 </body>
 </html>
