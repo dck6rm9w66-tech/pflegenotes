@@ -63,12 +63,13 @@
         { id: "meas_bz", name: "Blutzucker", unit: "mg/dl" }
       ],
       placeholders: [
-        { id: "ph_person", name: "Person" },
-        { id: "ph_hashtag", name: "Hashtag" },
-        { id: "ph_thema", name: "Thema" },
-        { id: "ph_zimmer", name: "Zimmer" }
+        { id: "ph_person", name: "Person", options: [] },
+        { id: "ph_hashtag", name: "Hashtag", options: [] },
+        { id: "ph_zeitstempel", name: "Zeitstempel", options: [] },
+        { id: "ph_thema", name: "Thema", options: [] },
+        { id: "ph_ort", name: "Ort", options: [] }
       ],
-      settings: { theme: "system", lastShiftType: "Früh", lastEntryMode: "shift" }
+      settings: { theme: "system", lastShiftType: "Früh", lastEntryMode: "shift", shiftTypeManualDate: null }
     };
   }
 
@@ -79,6 +80,48 @@
     { id: "abgelehnt", label: "Abgelehnt" }
   ];
 
+  // Textvorlagen eines älteren Speicherstands (vor Namen/Emojis/Platzhaltern)
+  // behutsam auf die aktuellen, reichhaltigeren Standard-Vorlagen anheben:
+  // nur eingebaute Vorlagen (bekannte ID), deren Text noch EXAKT dem alten
+  // Original entspricht und die noch keinen eigenen Namen haben, werden
+  // ersetzt – jede eigene Änderung des Users bleibt unangetastet. Neue,
+  // eingebaute Vorlagen, die es in der alten Version noch gar nicht gab,
+  // werden ergänzt, falls sie fehlen.
+  var LEGACY_BUILTIN_TEMPLATE_TEXT = {
+    tpl_vital: "Vitalzeichen kontrolliert, unauffällig.",
+    tpl_med: "Medikamente verabreicht wie verordnet.",
+    tpl_rundgang: "Rundgang durchgeführt, keine Auffälligkeiten.",
+    tpl_schlaeft: "Patient/in schläft.",
+    tpl_arzt: "Arzt/Ärztin informiert."
+  };
+  function migrateTemplates(savedTemplates) {
+    var defaults = defaultState().templates;
+    var defaultsById = {};
+    defaults.forEach(function (t) { defaultsById[t.id] = t; });
+    var seenIds = {};
+    var migrated = savedTemplates.map(function (t) {
+      seenIds[t.id] = true;
+      var def = defaultsById[t.id];
+      var legacyText = LEGACY_BUILTIN_TEMPLATE_TEXT[t.id];
+      if (def && !t.name && legacyText && t.text === legacyText) {
+        return { id: def.id, name: def.name, text: def.text };
+      }
+      return t;
+    });
+    defaults.forEach(function (def) {
+      if (!seenIds[def.id]) migrated.push(def);
+    });
+    return migrated;
+  }
+  // Gleiches Prinzip für Platzhalter: fehlt "Zeitstempel" (neu hinzugekommen),
+  // einfach ergänzen – rein additiv, verändert nichts Bestehendes.
+  function migratePlaceholders(savedPlaceholders) {
+    var hasZeitstempel = savedPlaceholders.some(function (p) { return p.name && p.name.toLowerCase() === "zeitstempel"; });
+    if (hasZeitstempel) return savedPlaceholders;
+    var def = defaultState().placeholders.filter(function (p) { return p.name === "Zeitstempel"; })[0];
+    return def ? savedPlaceholders.concat([def]) : savedPlaceholders;
+  }
+
   function loadState() {
     try {
       var raw = localStorage.getItem(STORAGE_KEY);
@@ -86,19 +129,38 @@
       var parsed = JSON.parse(raw);
       if (!parsed || typeof parsed !== "object") return defaultState();
       var d = defaultState();
+      var needsResave = false;
       parsed.categories = parsed.categories || d.categories;
       parsed.people = parsed.people || [];
       parsed.entries = parsed.entries || [];
       parsed.shifts = parsed.shifts || [];
-      parsed.templates = parsed.templates || d.templates;
+      if (parsed.templates) {
+        var migratedTemplates = migrateTemplates(parsed.templates);
+        if (JSON.stringify(migratedTemplates) !== JSON.stringify(parsed.templates)) needsResave = true;
+        parsed.templates = migratedTemplates;
+      } else {
+        parsed.templates = d.templates;
+      }
       parsed.patients = parsed.patients || [];
       parsed.effortLevels = parsed.effortLevels || d.effortLevels;
       parsed.timeLevels = parsed.timeLevels || d.timeLevels;
       parsed.medications = parsed.medications || d.medications;
       parsed.measurementTypes = parsed.measurementTypes || d.measurementTypes;
-      parsed.placeholders = parsed.placeholders || d.placeholders;
+      if (parsed.placeholders) {
+        var migratedPlaceholders = migratePlaceholders(parsed.placeholders);
+        if (migratedPlaceholders !== parsed.placeholders) needsResave = true;
+        parsed.placeholders = migratedPlaceholders;
+      } else {
+        parsed.placeholders = d.placeholders;
+      }
       parsed.settings = parsed.settings || d.settings;
       if (!parsed.settings.lastEntryMode) parsed.settings.lastEntryMode = "shift";
+      // Migration dauerhaft sichern, statt sie bei jedem Laden erneut nur
+      // im Arbeitsspeicher anzuwenden (sonst "repariert" sich der Stand nur
+      // scheinbar, bis zum nächsten echten Speichervorgang).
+      if (needsResave) {
+        try { localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed)); } catch (e) { /* wird beim nächsten regulären Speichern ohnehin mitgeschrieben */ }
+      }
       return parsed;
     } catch (e) {
       console.error("Fehler beim Laden der Daten:", e);
@@ -356,7 +418,11 @@
     entries = entries.filter(function (e) { return !e.shiftPhotoId; })
       .sort(function (a, b) { return new Date(a.timestamp) - new Date(b.timestamp); });
 
-    var lines = ["Übergabe – " + label];
+    var DIV = "────────────────────────────";
+    var lines = [];
+    lines.push("ÜBERGABE · " + label);
+    lines.push("Erstellt am " + formatDateShort(now) + ", " + formatTime(now) + " Uhr");
+
     if (scope === "shift") {
       var shift = findShift(ui.shift.date, ui.shift.type);
       if (shift) {
@@ -367,20 +433,108 @@
         if (bits.length) lines.push(bits.join(" · "));
       }
     }
+
+    // Kurzübersicht
+    var patientIds = {};
+    var medAbgelehnt = 0, photoCount = 0;
+    entries.forEach(function (e) {
+      if (e.patientId) patientIds[e.patientId] = true;
+      (e.medications || []).forEach(function (m) { if (m.status === "abgelehnt") medAbgelehnt++; });
+      if (e.photos && e.photos.length) photoCount += e.photos.length;
+    });
+    var patientCount = Object.keys(patientIds).length;
     lines.push("");
+    lines.push(DIV);
+    lines.push("ÜBERSICHT");
+    lines.push(DIV);
+    lines.push(entries.length + (entries.length === 1 ? " Eintrag" : " Einträge") + (patientCount ? " · " + patientCount + (patientCount === 1 ? " Patient/in" : " Patient/innen") : ""));
+    if (medAbgelehnt) lines.push("⚠ " + medAbgelehnt + " abgelehnte(s) Medikament(e) – siehe unten");
+    if (photoCount) lines.push("📷 " + photoCount + " Foto(s) dokumentiert (in der App einsehbar)");
+
     if (!entries.length) {
-      lines.push("Keine Einträge im gewählten Zeitraum.");
-    } else {
-      entries.forEach(function (e) {
-        var names = (e.personIds || []).map(function (pid) { var p = getPerson(pid); return p ? p.name : null; })
-          .filter(function (x) { return x; });
-        var line = "• " + formatTime(new Date(e.timestamp)) + " – " + String(e.text).replace(/\s*\n+\s*/g, " / ");
-        if (names.length) line += " (Beteiligt: " + names.join(", ") + ")";
-        lines.push(line);
-      });
       lines.push("");
-      lines.push(entries.length + (entries.length === 1 ? " Eintrag" : " Einträge"));
+      lines.push("Keine Einträge im gewählten Zeitraum.");
+      return lines.join("\n");
     }
+
+    // Pro Patient/in gruppierte Kurzübersicht (nur relevant, wenn mehrere
+    // Patienten betroffen sind – hilft beim schnellen Überblick vor den
+    // chronologischen Details).
+    if (patientCount > 1) {
+      lines.push("");
+      lines.push("Betroffene Patient/innen:");
+      Object.keys(patientIds).forEach(function (pid) {
+        var p = getPatient(pid);
+        var count = entries.filter(function (e) { return e.patientId === pid; }).length;
+        lines.push("  • " + (p ? p.name : "Unbekannt") + " (" + count + (count === 1 ? " Eintrag" : " Einträge") + ")");
+      });
+    }
+
+    lines.push("");
+    lines.push(DIV);
+    lines.push("CHRONOLOGISCHER VERLAUF");
+    lines.push(DIV);
+
+    entries.forEach(function (e, idx) {
+      lines.push("");
+      lines.push("[" + formatTime(new Date(e.timestamp)) + " Uhr]");
+
+      if (e.mode === "patient") {
+        var patient = e.patientId ? getPatient(e.patientId) : null;
+        var pname = patient ? patient.name : "Unbekannte/r Patient/in";
+        var room = e.room || (patient ? patient.room : "");
+        var pmetaBits = [];
+        if (patient && patient.gender) pmetaBits.push(patient.gender);
+        if (room) pmetaBits.push("Zimmer " + room);
+        if (patient && patient.station) pmetaBits.push(patient.station);
+        lines.push("Patient/in: " + pname + (pmetaBits.length ? " (" + pmetaBits.join(", ") + ")" : ""));
+
+        var eff = e.effortLevelId ? getEffortLevel(e.effortLevelId) : null;
+        var tl = e.timeLevelId ? getTimeLevel(e.timeLevelId) : null;
+        if (eff || tl) {
+          var ebits = [];
+          if (eff) ebits.push("Aufwand: " + eff.label);
+          if (tl) ebits.push("Zeitaufwand: " + tl.label);
+          lines.push(ebits.join(" · "));
+        }
+      }
+
+      if (e.text) lines.push(String(e.text).replace(/\r\n|\r/g, "\n"));
+
+      if (e.medications && e.medications.length) {
+        e.medications.forEach(function (m) {
+          var med = getMedication(m.medId);
+          var flag = m.status === "abgelehnt" ? "⚠ " : "  ";
+          lines.push(flag + "Medikament: " + (med ? med.name : "?") + (m.amount ? " " + m.amount : "") + " – " + medStatusLabel(m.status));
+        });
+      }
+
+      if (e.measurements && e.measurements.length) {
+        e.measurements.forEach(function (m) {
+          var mt = getMeasurementType(m.measId);
+          lines.push("  Messung: " + (mt ? mt.name : "?") + (m.value ? ": " + m.value : "") + (mt && mt.unit && m.value ? " " + mt.unit : ""));
+        });
+      }
+
+      var names = (e.personIds || []).map(function (pid) {
+        var p = getPerson(pid);
+        if (!p) return null;
+        var role = e.personRoles && e.personRoles[pid] ? " (" + e.personRoles[pid] + ")" : "";
+        return p.name + role;
+      }).filter(function (x) { return x; });
+      if (names.length) lines.push("  Beteiligt: " + names.join(", "));
+
+      if (e.hashtags && e.hashtags.length) lines.push("  " + e.hashtags.map(function (t) { return "#" + t; }).join("  "));
+
+      if (e.photos && e.photos.length) lines.push("  📷 " + e.photos.length + " Foto(s) angehängt");
+
+      if (idx < entries.length - 1) lines.push(DIV.slice(0, 16));
+    });
+
+    lines.push("");
+    lines.push(DIV);
+    lines.push("Ende der Übergabe – " + entries.length + (entries.length === 1 ? " Eintrag" : " Einträge"));
+
     return lines.join("\n");
   }
 
@@ -578,6 +732,7 @@
             (isFirst ? "<span></span>" : '<button type="button" class="btn btn--ghost" id="onboardingBack">Zurück</button>') +
             '<button type="button" class="btn btn--primary" id="onboardingNext">' + (isLast ? "Los geht's" : "Weiter") + '</button>' +
           '</div>' +
+          (isLast ? '<button type="button" class="btn btn--ghost btn--block" id="onboardingDemoBtn" style="margin-top:10px;">Mit Demo-Daten starten (zwei Wochen Beispiel-Einträge)</button>' : '') +
         '</div>' +
       '</div>';
 
@@ -591,6 +746,21 @@
     document.getElementById("onboardingNext").addEventListener("click", function () {
       if (isLast) closeOnboarding(); else renderOnboarding(step + 1);
     });
+    if (isLast) {
+      document.getElementById("onboardingDemoBtn").addEventListener("click", function () {
+        function proceed() {
+          loadDemoData();
+          closeOnboarding();
+        }
+        if (state.entries.length > 0) {
+          confirmDialog("Das fügt zwei Wochen Beispieldaten zu deinen bestehenden Einträgen hinzu. Fortfahren?", "Demo-Daten laden", false).then(function (ok) {
+            if (ok) proceed();
+          });
+        } else {
+          proceed();
+        }
+      });
+    }
   }
 
   function closeOnboarding() {
@@ -602,6 +772,179 @@
     var seen = null;
     try { seen = localStorage.getItem(ONBOARDING_KEY); } catch (e) { /* ignore */ }
     if (!seen) renderOnboarding(0);
+  }
+
+  // Erzeugt rund zwei Wochen realistische Beispieldaten, dynamisch ausgehend
+  // vom heutigen Datum (endet heute), mit Einträgen in BEIDEN Modi, damit
+  // Log/Kalender/Verlauf/Übergabe direkt mit Inhalt gefüllt sind. Greift
+  // Options-Listen (Aufwand/Zeitaufwand/Medikamente/Messungen) dynamisch
+  // per Namen ab statt per fester ID, damit es auch funktioniert, falls
+  // diese Listen schon individuell angepasst wurden.
+  function loadDemoData() {
+    var now = new Date();
+
+    var demoPeople = [
+      { name: "Lukas Meier", categoryId: "kat_kollege" },
+      { name: "Dr. Anna Frei", categoryId: "kat_arzt" },
+      { name: "Sandra Huber", categoryId: "kat_leitung" }
+    ].map(function (d) {
+      var p = { id: uid("person"), name: d.name, categoryId: d.categoryId, note: "" };
+      state.people.push(p);
+      return p;
+    });
+
+    var demoPatients = [
+      { name: "Frau Keller", gender: "Weiblich", room: "12", station: "Station 3" },
+      { name: "Herr Baumann", gender: "Männlich", room: "14", station: "Station 3" },
+      { name: "Frau Steiner", gender: "Weiblich", room: "08", station: "Station 2" }
+    ].map(function (d) {
+      var p = { id: uid("patient"), name: d.name, gender: d.gender, room: d.room, station: d.station };
+      state.patients.push(p);
+      return p;
+    });
+
+    function idByField(list, field, value) {
+      var item = list.filter(function (x) { return x[field] === value; })[0];
+      return item ? item.id : null;
+    }
+    var effGering = idByField(state.effortLevels, "label", "Gering");
+    var effMittel = idByField(state.effortLevels, "label", "Mittel");
+    var effHoch = idByField(state.effortLevels, "label", "Hoch");
+    var tz5 = idByField(state.timeLevels, "label", "< 5 Min");
+    var tz15 = idByField(state.timeLevels, "label", "5–15 Min");
+    var tz30 = idByField(state.timeLevels, "label", "15–30 Min");
+    var medParacetamol = idByField(state.medications, "name", "Paracetamol");
+    var medIbuprofen = idByField(state.medications, "name", "Ibuprofen");
+    var medNovalgin = idByField(state.medications, "name", "Novalgin");
+    var measRR = idByField(state.measurementTypes, "name", "Blutdruck");
+    var measTemp = idByField(state.measurementTypes, "name", "Temperatur");
+    var measPuls = idByField(state.measurementTypes, "name", "Puls");
+
+    var shiftTexts = [
+      "Rundgang durchgeführt, keine Auffälligkeiten. #rundgang",
+      "Medikamente verabreicht wie verordnet.",
+      "Übergabe Medikamentenschrank kontrolliert.",
+      "Pflegebericht aktualisiert.",
+      "Arzt informiert bezüglich Blutwerte. #labor",
+      "Zuteilungsplan mit Team besprochen.",
+      "Patientenzimmer kontrolliert, alles in Ordnung."
+    ];
+    var shiftTypesByDay = ["Früh", "Früh", "Spät", "Früh", "Nacht", "Früh", "Spät",
+                           "Früh", "Spät", "Nacht", "Früh", "Früh", "Spät", "Früh"];
+
+    function makeDate(dayOffset, hour, minute) {
+      var d = new Date(now);
+      d.setDate(d.getDate() - dayOffset);
+      d.setHours(hour, minute, 0, 0);
+      return d;
+    }
+
+    var patientScenarios = [
+      function () {
+        return {
+          effortLevelId: effMittel, timeLevelId: tz15,
+          medications: medParacetamol ? [{ medId: medParacetamol, status: "angenommen", amount: "500mg" }] : [],
+          measurements: measRR ? [{ measId: measRR, value: "125/80" }] : [],
+          personIds: [], personRoles: {},
+          text: "Patientin wach, orientiert, keine Beschwerden."
+        };
+      },
+      function () {
+        var doc = demoPeople[1];
+        var roles = {};
+        if (doc) roles[doc.id] = "informiert";
+        return {
+          effortLevelId: effHoch, timeLevelId: tz30,
+          medications: medIbuprofen ? [{ medId: medIbuprofen, status: "abgelehnt", amount: "400mg" }] : [],
+          measurements: [],
+          personIds: doc ? [doc.id] : [], personRoles: roles,
+          text: "Schmerzen geäussert, Arzt informiert. #schmerz"
+        };
+      },
+      function () {
+        return {
+          effortLevelId: effGering, timeLevelId: tz5,
+          medications: [],
+          measurements: measTemp ? [{ measId: measTemp, value: "37.8" }] : [],
+          personIds: [], personRoles: {},
+          text: "Leicht erhöhte Temperatur, wird beobachtet. #fieber"
+        };
+      },
+      function () {
+        return {
+          effortLevelId: effMittel, timeLevelId: tz15,
+          medications: medNovalgin ? [{ medId: medNovalgin, status: "teilweise", amount: "20 Trpf." }] : [],
+          measurements: measPuls ? [{ measId: measPuls, value: "78" }] : [],
+          personIds: [], personRoles: {},
+          text: "Nahrungsaufnahme beobachtet, isst wenig."
+        };
+      },
+      function () {
+        var leit = demoPeople[2];
+        var roles = {};
+        if (leit) roles[leit.id] = "Rücksprache";
+        return {
+          effortLevelId: effGering, timeLevelId: tz5,
+          medications: [],
+          measurements: [],
+          personIds: leit ? [leit.id] : [], personRoles: roles,
+          text: "Rücksprache gehalten, keine besonderen Vorkommnisse."
+        };
+      },
+      function () {
+        return {
+          effortLevelId: effHoch, timeLevelId: tz30,
+          medications: [],
+          measurements: measRR ? [{ measId: measRR, value: "140/90" }] : [],
+          personIds: [], personRoles: {},
+          text: "Unruhig, Blutdruck erhöht, weiter beobachten. #blutdruck"
+        };
+      }
+    ];
+
+    for (var dayOffset = 13; dayOffset >= 0; dayOffset--) {
+      var dayKey = dateToKey(makeDate(dayOffset, 12, 0));
+      var shiftType = shiftTypesByDay[13 - dayOffset];
+      var baseHour = shiftType === "Früh" ? 8 : (shiftType === "Spät" ? 16 : 23);
+
+      var sText = shiftTexts[dayOffset % shiftTexts.length];
+      var sTime = makeDate(dayOffset, baseHour, 15 + (dayOffset % 3) * 10);
+      state.entries.push({
+        id: uid("entry"),
+        timestamp: sTime.toISOString(),
+        text: sText,
+        personIds: [demoPeople[dayOffset % demoPeople.length].id],
+        hashtags: extractHashtags(sText),
+        shiftDate: dayKey,
+        shiftType: shiftType
+      });
+
+      var patient = demoPatients[dayOffset % demoPatients.length];
+      var scenario = patientScenarios[dayOffset % patientScenarios.length]();
+      var pTime = makeDate(dayOffset, baseHour, 40 + (dayOffset % 2) * 10);
+      state.entries.push({
+        id: uid("entry"),
+        timestamp: pTime.toISOString(),
+        text: scenario.text,
+        personIds: scenario.personIds,
+        personRoles: scenario.personRoles,
+        hashtags: extractHashtags(scenario.text),
+        shiftDate: dayKey,
+        shiftType: shiftType,
+        mode: "patient",
+        patientId: patient.id,
+        room: patient.room,
+        effortLevelId: scenario.effortLevelId,
+        timeLevelId: scenario.timeLevelId,
+        medications: scenario.medications,
+        measurements: scenario.measurements,
+        photos: []
+      });
+    }
+
+    persist();
+    refreshAllViews();
+    toast("Demo-Daten geladen – viel Spass beim Erkunden!");
   }
 
   /* ---------------------------------------------------------------------
@@ -977,6 +1320,8 @@
     }
     if (name === "mehr") renderMehr();
     if (name === "start") {
+      applyAutoShiftType();
+      renderShiftBar();
       renderPersonChips(); renderHashtagSuggestions(); renderTemplateChips();
       if (!document.getElementById("patientModeWrap").hidden) renderPatientForm("patientFormRoot");
     }
@@ -1096,23 +1441,33 @@
     wrap.querySelectorAll("[data-template]").forEach(function (chip) {
       chip.addEventListener("click", function () {
         var t = templates.filter(function (x) { return x.id === chip.dataset.template; })[0];
-        if (t) insertTemplateIntoTextarea(document.getElementById("entryText"), t.text, {
+        if (!t) return;
+        insertTemplateIntoTextarea(function () { return document.getElementById("entryText"); }, t.text, {
           onPersonInvolved: function (p) {
             if (ui.selectedPersonIds.indexOf(p.id) === -1) ui.selectedPersonIds.push(p.id);
             renderPersonChips();
-          }
+          },
+          getTimestamp: function () { return ui.entryTimestamp; }
         });
       });
     });
   }
 
-  // ---- Platzhalter in Vorlagen: {Person}, {Hashtag} werden "smart" über
-  // eine Auswahl aufgelöst (inkl. Verknüpfung mit "Beteiligt"); jeder andere
-  // {Platzhalter} wird nach dem Einfügen einfach markiert, damit man sofort
-  // darüberschreiben kann. Bewusst textarea-agnostisch (Parameter `ta`) und
-  // mit `hooks.onPersonInvolved`, damit dieselbe Logik im Schicht- wie im
-  // Patienten-Formular funktioniert (dort landet die Person z. B. in
-  // patientUi.involvedPeople statt in ui.selectedPersonIds). ----
+  // ---- Platzhalter in Vorlagen: {Person} und {Hashtag} werden "smart" über
+  // eine Auswahl aufgelöst (inkl. Verknüpfung mit "Beteiligt"), {Zeitstempel}
+  // wird direkt eingesetzt, benutzerdefinierte Platzhalter mit hinterlegten
+  // Optionen (unter "Mehr" editierbar) zeigen eine Auswahlliste, alles
+  // andere wird nach dem Einfügen einfach markiert, um es zu überschreiben.
+  //
+  // Wichtig: `getTa` ist bewusst eine GETTER-FUNKTION statt eines direkten
+  // Element-Verweises. Grund: Im Patienten-Formular löst das Verknüpfen
+  // einer Person (hooks.onPersonInvolved) ein komplettes Neu-Rendern des
+  // Formulars aus (neues Textarea-Element!) – ein zuvor eingefangener
+  // Element-Verweis wäre dann auf ein bereits aus dem DOM entferntes,
+  // "totes" Element veraltet, und nachfolgende Platzhalter (z. B. ein
+  // direkt danach folgender {Hashtag}) würden unsichtbar ins Leere
+  // geschrieben. getTa() fragt bei jedem Schritt frisch das aktuell
+  // gültige Element ab und umgeht das Problem strukturell.
   var PLACEHOLDER_RE = /\{([^{}]+)\}/;
   function findPlaceholder(text, fromIndex) {
     var from = fromIndex || 0;
@@ -1123,7 +1478,8 @@
     return { start: start, end: start + m[0].length, label: m[1].trim() };
   }
 
-  function applyPlaceholderValue(ta, match, value) {
+  function applyPlaceholderValue(getTa, match, value) {
+    var ta = getTa();
     var text = ta.value;
     ta.value = text.slice(0, match.start) + value + text.slice(match.end);
     if (ta.id === "entryText") saveDraft();
@@ -1131,21 +1487,32 @@
     return match.start + value.length;
   }
 
-  function resolveNextPlaceholder(ta, fromIndex, hooks) {
+  function resolveNextPlaceholder(getTa, fromIndex, hooks) {
+    var ta = getTa();
     var m = findPlaceholder(ta.value, fromIndex);
     if (!m) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); return; }
     var label = m.label.toLowerCase();
     if (label === "person" || label === "personen" || label === "name") {
-      openPlaceholderPersonPicker(ta, m, hooks);
+      openPlaceholderPersonPicker(getTa, m, hooks);
     } else if (label === "hashtag" || label === "tag" || label === "stichwort") {
-      openPlaceholderHashtagPicker(ta, m, hooks);
+      openPlaceholderHashtagPicker(getTa, m, hooks);
+    } else if (label === "zeitstempel" || label === "zeit" || label === "uhrzeit") {
+      var ts = (hooks && hooks.getTimestamp) ? hooks.getTimestamp() : new Date();
+      var formatted = formatDateShort(ts) + ", " + formatTime(ts);
+      var newPos = applyPlaceholderValue(getTa, m, formatted);
+      resolveNextPlaceholder(getTa, newPos, hooks);
     } else {
-      ta.focus();
-      ta.setSelectionRange(m.start, m.end);
+      var def = (state.placeholders || []).filter(function (p) { return p.name.toLowerCase() === label; })[0];
+      if (def && def.options && def.options.length) {
+        openPlaceholderOptionsPicker(getTa, m, def, hooks);
+      } else {
+        ta.focus();
+        ta.setSelectionRange(m.start, m.end);
+      }
     }
   }
 
-  function openPlaceholderPersonPicker(ta, match, hooks) {
+  function openPlaceholderPersonPicker(getTa, match, hooks) {
     var peopleHtml = state.people.map(function (p) {
       var col = categoryColorForPerson(p.id) || "#8A9793";
       return '<button type="button" class="chip" style="--chip-color:' + col + '" data-pick-person="' + p.id + '"><span class="chip__dot"></span>' + esc(p.name) + '</button>';
@@ -1158,10 +1525,10 @@
       '<button type="button" class="btn btn--ghost btn--block" data-close-modal style="margin-top:16px;">Abbrechen (Platzhalter behalten)</button>');
 
     function pick(p) {
-      var newPos = applyPlaceholderValue(ta, match, p.name);
+      var newPos = applyPlaceholderValue(getTa, match, p.name);
       if (hooks && hooks.onPersonInvolved) hooks.onPersonInvolved(p);
       closeModal();
-      resolveNextPlaceholder(ta, newPos, hooks);
+      resolveNextPlaceholder(getTa, newPos, hooks);
     }
     sheet.querySelectorAll("[data-pick-person]").forEach(function (chip) {
       chip.addEventListener("click", function () {
@@ -1174,7 +1541,7 @@
     });
   }
 
-  function openPlaceholderHashtagPicker(ta, match, hooks) {
+  function openPlaceholderHashtagPicker(getTa, match, hooks) {
     var tags = getTopHashtags(12);
     var tagsHtml = tags.map(function (t) {
       return '<button type="button" class="chip" style="--chip-color:var(--accent)" data-pick-tag="' + esc(t) + '">#' + esc(t) + '</button>';
@@ -1189,9 +1556,9 @@
       '</div>');
 
     function pick(tag) {
-      var newPos = applyPlaceholderValue(ta, match, "#" + tag);
+      var newPos = applyPlaceholderValue(getTa, match, "#" + tag);
       closeModal();
-      resolveNextPlaceholder(ta, newPos, hooks);
+      resolveNextPlaceholder(getTa, newPos, hooks);
     }
     sheet.querySelectorAll("[data-pick-tag]").forEach(function (chip) {
       chip.addEventListener("click", function () { pick(chip.dataset.pickTag); });
@@ -1203,14 +1570,31 @@
     });
   }
 
-  function insertTemplateIntoTextarea(ta, phrase, hooks) {
+  function openPlaceholderOptionsPicker(getTa, match, def, hooks) {
+    var optsHtml = def.options.map(function (o) {
+      return '<button type="button" class="chip" style="--chip-color:var(--primary)" data-pick-option="' + esc(o) + '">' + esc(o) + '</button>';
+    }).join("");
+    var sheet = openModal(esc(def.name) + " einsetzen", '' +
+      '<div class="chip-row">' + optsHtml + '</div>' +
+      '<button type="button" class="btn btn--ghost btn--block" data-close-modal style="margin-top:16px;">Abbrechen (Platzhalter behalten)</button>');
+    sheet.querySelectorAll("[data-pick-option]").forEach(function (chip) {
+      chip.addEventListener("click", function () {
+        var newPos = applyPlaceholderValue(getTa, match, chip.dataset.pickOption);
+        closeModal();
+        resolveNextPlaceholder(getTa, newPos, hooks);
+      });
+    });
+  }
+
+  function insertTemplateIntoTextarea(getTa, phrase, hooks) {
+    var ta = getTa();
     var text = ta.value;
     var sep = text.length && !/\s$/.test(text) ? " " : "";
     var insertStart = text.length + sep.length;
     ta.value = text + sep + phrase + " ";
     if (ta.id === "entryText") saveDraft();
     if (ta.dataset && ta.dataset.role === "patient-text") patientUi.text = ta.value;
-    resolveNextPlaceholder(ta, insertStart, hooks);
+    resolveNextPlaceholder(getTa, insertStart, hooks);
   }
 
   function renderTemplateList() {
@@ -1311,9 +1695,32 @@
 
   document.addEventListener("DOMContentLoaded", init);
 
+  // Schlägt anhand der aktuellen Uhrzeit eine Schicht vor (grobe, aber
+  // praxisnahe Fenster). Wird nur verwendet, solange der User die Schicht
+  // an diesem Tag noch nicht selbst gewählt hat – siehe applyAutoShiftType().
+  function suggestShiftTypeForNow() {
+    var h = new Date().getHours();
+    if (h >= 6 && h < 14) return "Früh";
+    if (h >= 14 && h < 22) return "Spät";
+    return "Nacht";
+  }
+
+  // Setzt ui.shift.type dynamisch nach Tageszeit, AUSSER der User hat die
+  // Schicht bereits an diesem Kalendertag manuell geändert (dann hat seine
+  // Wahl Vorrang und wird nicht stillschweigend überschrieben). Wird beim
+  // Start und jedes Mal beim Aufruf der "Neu"-Ansicht geprüft, damit ein
+  // Tageswechsel bei durchgehend geöffneter App korrekt nachzieht.
+  function applyAutoShiftType() {
+    var todayK = todayKey();
+    if (state.settings.shiftTypeManualDate !== todayK) {
+      ui.shift.type = suggestShiftTypeForNow();
+    }
+  }
+
   function init() {
     state = loadState();
     ui.shift.type = state.settings.lastShiftType || "Früh";
+    applyAutoShiftType();
     applyTheme();
 
     renderShiftBar();
@@ -1338,6 +1745,7 @@
     });
 
     document.getElementById("shiftTypeBtn").addEventListener("click", openShiftTypeModal);
+    document.getElementById("shiftHistoryBtn").addEventListener("click", openShiftHistoryModal);
     document.getElementById("shiftPhotoBtn").addEventListener("click", function () {
       openShiftPhotoModal({ date: ui.shift.date, type: ui.shift.type });
     });
@@ -1398,7 +1806,7 @@
     document.getElementById("addTimeLevelBtn").addEventListener("click", function () { openOptionModal("time", null); });
     document.getElementById("addMedicationBtn").addEventListener("click", function () { openOptionModal("medication", null); });
     document.getElementById("addMeasurementTypeBtn").addEventListener("click", function () { openOptionModal("measurement", null); });
-    document.getElementById("addPlaceholderBtn").addEventListener("click", function () { openOptionModal("placeholderVar", null); });
+    document.getElementById("addPlaceholderBtn").addEventListener("click", function () { openPlaceholderEditModal(null); });
     document.getElementById("hashtagStatsBtn").addEventListener("click", openHashtagStatsModal);
     document.getElementById("handoverBtn").addEventListener("click", openHandoverModal);
     document.getElementById("lockSetupBtn").addEventListener("click", openPinSetupModal);
@@ -1532,6 +1940,10 @@
       ui.shift.date = sheet.querySelector("#shiftDateInput").value || todayKey();
       ui.shift.type = customText || (activeChip ? activeChip.dataset.shiftType : "") || "Früh";
       state.settings.lastShiftType = ui.shift.type;
+      // Merkt sich, dass die Schicht an DIESEM Tag bewusst manuell gewählt
+      // wurde – die Zeit-basierte Vorauswahl überschreibt das bis zum
+      // nächsten Kalendertag nicht mehr stillschweigend.
+      state.settings.shiftTypeManualDate = todayKey();
       persist();
       renderShiftBar();
       closeModal();
@@ -1597,7 +2009,8 @@
       if (isPatient) {
         var patient = entry.patientId ? getPatient(entry.patientId) : null;
         var pname = patient ? patient.name : "Unbekannte/r Patient/in";
-        var pmeta = patient ? [patient.gender, patient.room ? "Zimmer " + patient.room : "", patient.station].filter(Boolean).join(" · ") : "";
+        var entryRoom = entry.room || (patient ? patient.room : "");
+        var pmeta = patient ? [patient.gender, entryRoom ? "Zimmer " + entryRoom : "", patient.station].filter(Boolean).join(" · ") : "";
         patientHeaderHTML = '<div class="entry-item__patient">' + esc(pname) + (pmeta ? '<span class="entry-item__patient-meta">' + esc(pmeta) + '</span>' : '') + '</div>';
 
         var pills = [];
@@ -1638,6 +2051,7 @@
           '</div>' +
           '<div class="entry-item__detail">' +
             '<div class="entry-item__actions">' +
+              '<button type="button" class="btn btn--ghost btn--small" data-duplicate="' + entry.id + '">Duplizieren</button>' +
               '<button type="button" class="btn btn--ghost btn--small" data-edit="' + entry.id + '" data-edit-mode="' + (isPatient ? "patient" : "shift") + '">Bearbeiten</button>' +
               '<button type="button" class="btn btn--danger btn--small" data-delete="' + entry.id + '">Löschen</button>' +
             '</div>' +
@@ -1645,6 +2059,31 @@
         '</div>';
     });
     return html;
+  }
+
+  // Dupliziert einen Eintrag (Schicht- wie Patienten-Modus, egal ob aus
+  // Log, Kalender oder dem Patientenverlauf aufgerufen – alle drei nutzen
+  // buildEntryListHTML/bindEntryListEvents gemeinsam) und öffnet die Kopie
+  // sofort zum Bearbeiten. Zeitstempel wird auf "jetzt" gesetzt (ein
+  // Duplikat ist meist eine Wiederholung JETZT, nicht zum alten Zeitpunkt);
+  // Fotos und die interne Schicht-Foto-Verknüpfung werden bewusst NICHT
+  // übernommen, da sie zum ursprünglichen Ereignis gehören, nicht zur Kopie.
+  function duplicateEntry(entryId) {
+    var original = state.entries.filter(function (e) { return e.id === entryId; })[0];
+    if (!original) return;
+    var copy = JSON.parse(JSON.stringify(original));
+    copy.id = uid("entry");
+    copy.timestamp = new Date().toISOString();
+    copy.photos = [];
+    delete copy.shiftPhotoId;
+    state.entries.push(copy);
+    persist();
+    renderHashtagSuggestions();
+    renderLog();
+    renderCalendar();
+    closeModal(); // falls aus dem Patientenverlauf-Modal aufgerufen
+    if (copy.mode === "patient") openEditPatientEntryModal(copy.id);
+    else openEditEntryModal(copy.id);
   }
 
   function bindEntryListEvents(container) {
@@ -1671,6 +2110,12 @@
         e.stopPropagation();
         if (btn.dataset.editMode === "patient") openEditPatientEntryModal(btn.dataset.edit);
         else openEditEntryModal(btn.dataset.edit);
+      });
+    });
+    container.querySelectorAll("[data-duplicate]").forEach(function (btn) {
+      btn.addEventListener("click", function (e) {
+        e.stopPropagation();
+        duplicateEntry(btn.dataset.duplicate);
       });
     });
     container.querySelectorAll("[data-delete]").forEach(function (btn) {
@@ -2139,8 +2584,7 @@
     effort: { stateKey: "effortLevels", idPrefix: "eff", listElId: "effortLevelList", fields: [{ key: "label", label: "Bezeichnung", placeholder: "z. B. Mittel" }] },
     time: { stateKey: "timeLevels", idPrefix: "zeit", listElId: "timeLevelList", fields: [{ key: "label", label: "Bezeichnung", placeholder: "z. B. 5–15 Min" }] },
     medication: { stateKey: "medications", idPrefix: "med", listElId: "medicationList", fields: [{ key: "name", label: "Name", placeholder: "z. B. Paracetamol" }] },
-    measurement: { stateKey: "measurementTypes", idPrefix: "meas", listElId: "measurementTypeList", fields: [{ key: "name", label: "Name", placeholder: "z. B. Blutdruck" }, { key: "unit", label: "Einheit (optional)", placeholder: "z. B. mmHg" }] },
-    placeholderVar: { stateKey: "placeholders", idPrefix: "ph", listElId: "placeholderList", fields: [{ key: "name", label: "Name", placeholder: "z. B. Zimmer" }] }
+    measurement: { stateKey: "measurementTypes", idPrefix: "meas", listElId: "measurementTypeList", fields: [{ key: "name", label: "Name", placeholder: "z. B. Blutdruck" }, { key: "unit", label: "Einheit (optional)", placeholder: "z. B. mmHg" }] }
   };
 
   function optionDisplayLabel(cfg, item) {
@@ -2215,6 +2659,80 @@
           persist();
           renderOptionList(kind);
           refreshPatientFormOptionUI();
+        });
+      });
+    }
+  }
+
+  /* ---------- Platzhalter-Variablen (eigene Verwaltung wegen der
+     Optionen-Liste, die sich nicht in das generische Options-Listen-
+     Schema der vier obigen Listen pressen lässt) ---------- */
+  function renderPlaceholderList() {
+    var wrap = document.getElementById("placeholderList");
+    if (!wrap) return;
+    var list = state.placeholders || [];
+    if (!list.length) { wrap.innerHTML = '<p class="category-empty">Noch keine Platzhalter.</p>'; return; }
+    wrap.innerHTML = list.map(function (ph) {
+      var sub = (ph.options && ph.options.length)
+        ? ph.options.length + " Option(en): " + ph.options.slice(0, 3).join(", ") + (ph.options.length > 3 ? " …" : "")
+        : "Freitext (wird beim Einfügen zum Überschreiben markiert)";
+      return '<div class="option-row"><div class="option-row__label">{' + esc(ph.name) + '}<span class="person-row__note">' + esc(sub) + '</span></div>' +
+        '<button type="button" class="option-row__edit" data-edit-placeholder="' + ph.id + '" aria-label="Bearbeiten">✎</button></div>';
+    }).join("");
+    wrap.querySelectorAll("[data-edit-placeholder]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var ph = list.filter(function (x) { return x.id === btn.dataset.editPlaceholder; })[0];
+        if (ph) openPlaceholderEditModal(ph);
+      });
+    });
+  }
+
+  function openPlaceholderEditModal(placeholder) {
+    var isNew = !placeholder;
+    var optionsText = (placeholder && placeholder.options ? placeholder.options : []).join("\n");
+    var sheet = openModal(isNew ? "Platzhalter hinzufügen" : "Platzhalter bearbeiten", '' +
+      '<div class="modal-field"><label for="phNameInput">Name</label>' +
+      '<input type="text" id="phNameInput" placeholder="z. B. Ort" value="' + esc(placeholder ? placeholder.name : "") + '"></div>' +
+      '<div class="modal-field"><label for="phOptionsInput">Optionen (eine pro Zeile, optional)</label>' +
+      '<textarea id="phOptionsInput" placeholder="z. B.&#10;Zimmer&#10;Bad&#10;Flur">' + esc(optionsText) + '</textarea>' +
+      '<p class="settings-hint" style="margin-top:6px; margin-bottom:0;">Mit hinterlegten Optionen erscheint beim Einfügen dieses Platzhalters eine Auswahlliste statt eines einfachen Markierens zum Überschreiben.</p>' +
+      '</div>' +
+      '<div class="modal-actions">' +
+        '<button type="button" class="btn btn--ghost" data-close-modal>Abbrechen</button>' +
+        '<button type="button" class="btn btn--primary" id="phSaveBtn">Speichern</button>' +
+      '</div>' +
+      (isNew ? "" : '<button type="button" class="btn btn--danger btn--block" id="phDeleteBtn" style="margin-top:10px;">Platzhalter löschen</button>'));
+
+    sheet.querySelector("#phSaveBtn").addEventListener("click", function () {
+      var name = sheet.querySelector("#phNameInput").value.trim();
+      if (!name) { toast("Bitte einen Namen eingeben."); return; }
+      var options = sheet.querySelector("#phOptionsInput").value.split("\n").map(function (s) { return s.trim(); }).filter(function (s) { return s; });
+      if (isNew) {
+        state.placeholders.push({ id: uid("ph"), name: name, options: options });
+        toast("Platzhalter hinzugefügt");
+      } else {
+        placeholder.name = name;
+        placeholder.options = options;
+        toast("Platzhalter aktualisiert");
+      }
+      persist();
+      closeModal();
+      renderPlaceholderList();
+    });
+
+    if (!isNew) {
+      sheet.querySelector("#phDeleteBtn").addEventListener("click", function () {
+        var idx = state.placeholders.findIndex(function (x) { return x.id === placeholder.id; });
+        if (idx === -1) return;
+        var removed = state.placeholders[idx];
+        state.placeholders.splice(idx, 1);
+        persist();
+        closeModal();
+        renderPlaceholderList();
+        showUndoToast("Platzhalter gelöscht", function () {
+          state.placeholders.splice(idx, 0, removed);
+          persist();
+          renderPlaceholderList();
         });
       });
     }
@@ -2344,12 +2862,30 @@
     }
   }
 
+  function openShiftHistoryModal() {
+    var entries = state.entries.filter(function (e) {
+      return e.shiftDate === ui.shift.date && e.shiftType === ui.shift.type && !e.shiftPhotoId;
+    });
+    var title = ui.shift.type + " · " + formatDateShort(keyToDate(ui.shift.date));
+    var sheet = openModal(title, '' +
+      (entries.length
+        ? '<div id="shiftHistoryList" class="entry-list" style="max-height:56vh; overflow-y:auto;"></div>'
+        : '<p class="modal-text">Noch keine Einträge für diese Schicht.</p>') +
+      '<div class="modal-actions" style="margin-top:14px;"><button type="button" class="btn btn--ghost btn--block" data-close-modal>Schliessen</button></div>');
+    if (entries.length) {
+      var listEl = sheet.querySelector("#shiftHistoryList");
+      listEl.innerHTML = buildEntryListHTML(entries);
+      bindEntryListEvents(listEl);
+    }
+  }
+
   /* ---------- Patienten-Eintragsformular (Start-Ansicht & Bearbeiten-Modal) ----------
      Wichtig: Das Formular kann gleichzeitig zweimal im DOM vorkommen (Start-
      Ansicht + Bearbeiten-Modal), deshalb werden ausnahmslos root-gescopte
      Selektoren (root.querySelector) statt document.getElementById verwendet. */
   var patientUi = {
     patientId: null,
+    room: "",
     timestamp: new Date(),
     effortLevelId: null,
     timeLevelId: null,
@@ -2368,11 +2904,16 @@
     var html = "";
     html += '<div class="involved"><div class="involved__label">Patient/in</div>';
     if (patient) {
-      var meta = [patient.gender, patient.room ? "Zimmer " + patient.room : "", patient.station].filter(Boolean).join(" · ");
+      var meta = [patient.gender, patient.station].filter(Boolean).join(" · ");
       html += '<div class="patient-selected-card">' +
         '<div class="patient-selected-card__name">' + esc(patient.name) + '</div>' +
         '<button type="button" class="link-btn" data-role="change-patient">Wechseln</button>' +
+        '<button type="button" class="icon-btn--inline" data-role="patient-history" aria-label="Verlauf ansehen"><svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg></button>' +
         (meta ? '<div class="patient-selected-card__meta">' + esc(meta) + '</div>' : "") +
+        '<div class="patient-selected-card__room">' +
+          '<label for="patientRoomField_' + esc(targetId) + '">Zimmer</label>' +
+          '<input type="text" id="patientRoomField_' + esc(targetId) + '" data-role="patient-room" placeholder="z. B. 204" value="' + esc(patientUi.room || "") + '">' +
+        '</div>' +
       '</div>';
     } else {
       html += '<div class="chip-row" data-role="patient-pick-chips"></div>';
@@ -2404,7 +2945,13 @@
 
     html += '<div class="involved"><div class="involved__label">Fotos (optional)</div><div class="entry-photos-row" data-role="photos-row"></div></div>';
 
-    html += '<div class="save-bar"><button type="button" class="btn btn--primary btn--block" data-role="save-patient-entry">Eintrag speichern</button></div>';
+    // Im Start-Formular bleibt der Speichern-Button sticky am unteren Rand
+    // sichtbar; eingebettet in ein Bearbeiten-Modal (targetId === "patientFormRootModal")
+    // würde dieselbe sticky-Positionierung ihn über den Fotos-Bereich legen,
+    // da das Modal ein eigener, kürzerer Scroll-Kontext ist – dort also
+    // normal im Textfluss platzieren.
+    var isModalContext = targetId === "patientFormRootModal";
+    html += '<div class="' + (isModalContext ? "save-bar save-bar--static" : "save-bar") + '"><button type="button" class="btn btn--primary btn--block" data-role="save-patient-entry">Eintrag speichern</button></div>';
 
     root.innerHTML = html;
 
@@ -2418,16 +2965,30 @@
         return '<button type="button" class="chip" style="--chip-color:var(--patient-accent)" data-pick-patient="' + p.id + '">' + esc(p.name) + '</button>';
       }).join("") + '<button type="button" class="chip chip--add" data-role="quick-add-patient">+ Neu</button>';
       pickWrap.querySelectorAll("[data-pick-patient]").forEach(function (chip) {
-        chip.addEventListener("click", function () { patientUi.patientId = chip.dataset.pickPatient; renderPatientForm(targetId); });
+        chip.addEventListener("click", function () {
+          var p = getPatient(chip.dataset.pickPatient);
+          patientUi.patientId = chip.dataset.pickPatient;
+          patientUi.room = p ? (p.room || "") : "";
+          renderPatientForm(targetId);
+        });
       });
       pickWrap.querySelector('[data-role="quick-add-patient"]').addEventListener("click", function () {
-        openPatientModal(null, { onCreated: function (p) { patientUi.patientId = p.id; renderPatientForm(targetId); } });
+        openPatientModal(null, { onCreated: function (p) {
+          patientUi.patientId = p.id;
+          patientUi.room = p.room || "";
+          renderPatientForm(targetId);
+        } });
       });
     } else {
       root.querySelector('[data-role="change-patient"]').addEventListener("click", function () {
         patientUi.patientId = null;
         renderPatientForm(targetId);
       });
+      root.querySelector('[data-role="patient-history"]').addEventListener("click", function () {
+        openPatientHistoryModal(patient.id);
+      });
+      var roomField = root.querySelector('[data-role="patient-room"]');
+      roomField.addEventListener("input", function () { patientUi.room = roomField.value; });
     }
 
     root.querySelector('[data-role="patient-ts-btn"]').addEventListener("click", function () { openPatientTimestampModal(targetId); });
@@ -2497,14 +3058,14 @@
         chip.addEventListener("click", function () {
           var t = templates.filter(function (x) { return x.id === chip.dataset.template; })[0];
           if (!t) return;
-          var textEl = root.querySelector('[data-role="patient-text"]');
-          insertTemplateIntoTextarea(textEl, t.text, {
+          insertTemplateIntoTextarea(function () { return document.getElementById(targetId).querySelector('[data-role="patient-text"]'); }, t.text, {
             onPersonInvolved: function (p) {
               if (!patientUi.involvedPeople.some(function (ip) { return ip.personId === p.id; })) {
                 patientUi.involvedPeople.push({ personId: p.id, role: "" });
               }
               renderPatientForm(targetId);
-            }
+            },
+            getTimestamp: function () { return patientUi.timestamp; }
           });
         });
       });
@@ -2629,6 +3190,7 @@
   function resetPatientUi() {
     patientUi = {
       patientId: patientUi.patientId, // Patient bleibt ausgewählt – meist mehrere Einträge nacheinander
+      room: patientUi.room, // Zimmer bleibt für die nächste Erfassung desselben Patienten vorausgewählt
       timestamp: new Date(),
       effortLevelId: null,
       timeLevelId: null,
@@ -2657,6 +3219,7 @@
       shiftType: ui.shift.type,
       mode: "patient",
       patientId: patientUi.patientId,
+      room: patientUi.room || "",
       effortLevelId: patientUi.effortLevelId,
       timeLevelId: patientUi.timeLevelId,
       medications: patientUi.medications.filter(function (m) { return m.medId; }).map(function (m) { return { medId: m.medId, status: m.status, amount: m.amount || "" }; }),
@@ -2678,6 +3241,7 @@
     var savedUi = patientUi;
     patientUi = {
       patientId: entry.patientId || null,
+      room: entry.room || (entry.patientId && getPatient(entry.patientId) ? getPatient(entry.patientId).room || "" : ""),
       timestamp: new Date(entry.timestamp),
       effortLevelId: entry.effortLevelId || null,
       timeLevelId: entry.timeLevelId || null,
@@ -2700,6 +3264,7 @@
       entry.text = txtEl ? txtEl.value.trim() : "";
       entry.timestamp = patientUi.timestamp.toISOString();
       entry.patientId = patientUi.patientId;
+      entry.room = patientUi.room || "";
       entry.effortLevelId = patientUi.effortLevelId;
       entry.timeLevelId = patientUi.timeLevelId;
       entry.medications = patientUi.medications.filter(function (m) { return m.medId; }).map(function (m) { return { medId: m.medId, status: m.status, amount: m.amount || "" }; });
@@ -3109,7 +3674,7 @@
     renderOptionList("time");
     renderOptionList("medication");
     renderOptionList("measurement");
-    renderOptionList("placeholderVar");
+    renderPlaceholderList();
   }
 
   function renderMehrThemeOptions() {
@@ -3326,7 +3891,8 @@
     if (entry.mode === "patient") {
       var patient = entry.patientId ? getPatient(entry.patientId) : null;
       var pname = patient ? patient.name : "Unbekannte/r Patient/in";
-      var pmeta = patient ? [patient.gender, patient.room ? "Zimmer " + patient.room : "", patient.station].filter(Boolean).join(" · ") : "";
+      var entryRoomW = entry.room || (patient ? patient.room : "");
+      var pmeta = patient ? [patient.gender, entryRoomW ? "Zimmer " + entryRoomW : "", patient.station].filter(Boolean).join(" · ") : "";
       patientPara = '<w:p><w:pPr><w:spacing w:before="40" w:after="20"/></w:pPr>' +
         '<w:r><w:rPr><w:b/><w:color w:val="B34D7A"/></w:rPr><w:t xml:space="preserve">' + xmlEsc(pname) + '</w:t></w:r>' +
         (pmeta ? '<w:r><w:rPr><w:color w:val="999999"/><w:sz w:val="18"/></w:rPr><w:t xml:space="preserve">  ·  ' + xmlEsc(pmeta) + '</w:t></w:r>' : '') +
