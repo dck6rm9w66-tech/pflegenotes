@@ -7,6 +7,11 @@
 
 (function () {
   var STORAGE_KEY = "schichtprotokoll_v1";
+  // Wird bei jeder ausgelieferten Version hochgezählt (auch in index.html bei
+  // den Asset-Links) und in "Mehr" angezeigt – so lässt sich prüfen, ob der
+  // Browser wirklich die neue Version geladen hat und nicht eine gecachte.
+  var APP_VERSION = "2026.10.02-c";
+  var resetInProgress = false; // während eines Voll-Resets darf nichts mehr zurückgeschrieben werden
   var MONTHS = ["Januar","Februar","März","April","Mai","Juni","Juli","August","September","Oktober","November","Dezember"];
   var WEEKDAYS_LONG = ["Sonntag","Montag","Dienstag","Mittwoch","Donnerstag","Freitag","Samstag"];
   var SHIFT_PRESETS = ["Früh", "Spät", "Nacht", "Tag"];
@@ -169,6 +174,7 @@
   }
 
   function persist() {
+    if (resetInProgress) return;
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
       checkStorageSize();
@@ -694,6 +700,7 @@
       highlight: true,
       body: [
         "Alle Einträge, Kontakte und Schicht-Fotos werden ausschliesslich lokal in diesem Browser auf diesem Gerät gespeichert – nichts wird an einen Server übertragen.",
+        "Hinweis: Das ist keine Konformitätsaussage. Dass die Daten nur lokal liegen, bedeutet nicht, dass die App datenschutzkonform ist. Den Einsatz mit echten Patientendaten solltest du vorab mit eurer Datenschutzstelle klären.",
         "Das heisst aber auch: Die Daten erscheinen nicht automatisch auf einem anderen Gerät oder in einem anderen Browser. Werden Browserdaten gelöscht oder ein privater/Inkognito-Modus genutzt, können Einträge verloren gehen.",
         "Tipp: Exportiere deine Daten regelmässig als JSON (unter „Mehr“) – das ist dein Backup und enthält auch die Schicht-Fotos. Über „Importieren“ spielst du sie auf einem anderen Gerät wieder ein."
       ]
@@ -820,14 +827,40 @@
     var measTemp = idByField(state.measurementTypes, "name", "Temperatur");
     var measPuls = idByField(state.measurementTypes, "name", "Puls");
 
+    // Platzhalter "Thema" und "Ort" mit mehreren Optionen füllen, damit beim
+    // Einfügen einer Vorlage direkt die Auswahlliste zu sehen ist. Rein
+    // additiv: bereits vorhandene eigene Optionen bleiben erhalten; fehlt
+    // der Platzhalter ganz, wird er angelegt.
+    function ensurePlaceholderOptions(name, options) {
+      var ph = state.placeholders.filter(function (p) { return p.name && p.name.toLowerCase() === name.toLowerCase(); })[0];
+      if (!ph) {
+        ph = { id: uid("ph"), name: name, options: [] };
+        state.placeholders.push(ph);
+      }
+      ph.options = ph.options || [];
+      options.forEach(function (o) { if (ph.options.indexOf(o) === -1) ph.options.push(o); });
+    }
+    ensurePlaceholderOptions("Thema", ["Medikamentenplan", "Schmerzmanagement", "Entlassung", "Angehörigengespräch", "Mobilisation", "Wundversorgung"]);
+    ensurePlaceholderOptions("Ort", ["Zimmer", "Bad", "Flur", "Aufenthaltsraum", "Röntgen", "OP-Vorbereitung", "Garten"]);
+
+    // Beispiel-Vorlage, die {Ort} nutzt (die eingebauten Vorlagen enthalten
+    // {Thema}, aber kein {Ort}) – nur ergänzen, falls noch nicht vorhanden.
+    if (!state.templates.some(function (t) { return t.id === "tpl_ort_demo"; })) {
+      state.templates.push({ id: "tpl_ort_demo", name: "📍 Ortswechsel", text: "Transport nach {Ort}, Begleitung durch {Person}. {Zeitstempel}" });
+    }
+
     var shiftTexts = [
       "Rundgang durchgeführt, keine Auffälligkeiten. #rundgang",
       "Medikamente verabreicht wie verordnet.",
       "Übergabe Medikamentenschrank kontrolliert.",
+      "Rücksprache mit Dr. Anna Frei gehalten bezüglich Medikamentenplan. #rücksprache",
       "Pflegebericht aktualisiert.",
       "Arzt informiert bezüglich Blutwerte. #labor",
+      "Transport nach Röntgen begleitet, danach zurück auf Zimmer.",
       "Zuteilungsplan mit Team besprochen.",
-      "Patientenzimmer kontrolliert, alles in Ordnung."
+      "Rücksprache mit Sandra Huber gehalten bezüglich Entlassung. #entlassung",
+      "Patientenzimmer kontrolliert, alles in Ordnung.",
+      "Aufenthaltsraum kontrolliert, Mobilisation mit Patient/in geübt. #mobilisation"
     ];
     var shiftTypesByDay = ["Früh", "Früh", "Spät", "Früh", "Nacht", "Früh", "Spät",
                            "Früh", "Spät", "Nacht", "Früh", "Früh", "Spät", "Früh"];
@@ -876,7 +909,7 @@
           medications: medNovalgin ? [{ medId: medNovalgin, status: "teilweise", amount: "20 Trpf." }] : [],
           measurements: measPuls ? [{ measId: measPuls, value: "78" }] : [],
           personIds: [], personRoles: {},
-          text: "Nahrungsaufnahme beobachtet, isst wenig."
+          text: "Nahrungsaufnahme im Aufenthaltsraum beobachtet, isst wenig."
         };
       },
       function () {
@@ -888,7 +921,7 @@
           medications: [],
           measurements: [],
           personIds: leit ? [leit.id] : [], personRoles: roles,
-          text: "Rücksprache gehalten, keine besonderen Vorkommnisse."
+          text: "Rücksprache mit Sandra Huber gehalten bezüglich Schmerzmanagement, keine besonderen Vorkommnisse."
         };
       },
       function () {
@@ -1082,9 +1115,7 @@
         true
       ).then(function (ok) {
         if (!ok) return;
-        setLockConfig(null);
-        try { localStorage.removeItem(STORAGE_KEY); } catch (e) { /* ignore */ }
-        location.reload();
+        resetEverything();
       });
     });
   }
@@ -1386,8 +1417,11 @@
       '<span class="chip__dot"></span>' + esc(name) + '</button>';
   }
 
-  function renderHashtagSuggestions() {
-    var wrap = document.getElementById("hashtagChips");
+  // Hashtag-Vorschläge: gemeinsame Logik für Schicht- und Patientenformular.
+  // `getTa` liefert das jeweils aktuell gültige Textfeld (siehe Hinweis zu
+  // Getter-Funktionen bei den Platzhaltern: das Patientenformular wird
+  // komplett neu gerendert, ein festgehaltener Element-Verweis wäre veraltet).
+  function fillHashtagChips(wrap, getTa) {
     var top = getTopHashtags(10);
     if (!top.length) {
       wrap.innerHTML = '<span class="category-empty">Tippe im Text z. B. #Station3, #Zimmer12, #Sturz …</span>';
@@ -1397,12 +1431,17 @@
       return '<button type="button" class="chip" style="--chip-color:var(--accent)" data-hashtag="' + esc(t) + '">#' + esc(t) + '</button>';
     }).join("");
     wrap.querySelectorAll("[data-hashtag]").forEach(function (chip) {
-      chip.addEventListener("click", function () { insertHashtagIntoTextarea(chip.dataset.hashtag); });
+      chip.addEventListener("click", function () { insertHashtagIntoTextarea(chip.dataset.hashtag, getTa); });
     });
   }
 
-  function insertHashtagIntoTextarea(tag) {
-    var ta = document.getElementById("entryText");
+  function renderHashtagSuggestions() {
+    fillHashtagChips(document.getElementById("hashtagChips"), function () { return document.getElementById("entryText"); });
+  }
+
+  function insertHashtagIntoTextarea(tag, getTa) {
+    var ta = getTa ? getTa() : document.getElementById("entryText");
+    if (!ta) return;
     var insertion = "#" + tag;
     var text = ta.value;
     if (document.activeElement === ta && typeof ta.selectionStart === "number") {
@@ -1419,7 +1458,8 @@
       ta.value = text + sep + insertion + " ";
       ta.focus();
     }
-    saveDraft();
+    if (ta.id === "entryText") saveDraft();
+    if (ta.dataset && ta.dataset.role === "patient-text") patientUi.text = ta.value;
   }
 
   // ---- Schnelltext-Vorlagen: eigene Kurzphrasen, per Tipp einfügbar ----
@@ -1718,7 +1758,12 @@
   }
 
   function init() {
+    if (/[?&]reset=/.test(location.search) && window.history && history.replaceState) {
+      history.replaceState(null, "", location.pathname);
+    }
     state = loadState();
+    var verEl = document.getElementById("appVersion");
+    if (verEl) verEl.textContent = "Version " + APP_VERSION;
     ui.shift.type = state.settings.lastShiftType || "Früh";
     applyAutoShiftType();
     applyTheme();
@@ -1839,6 +1884,7 @@
   // localStorage-Schlüssel, unabhängig vom eigentlichen Daten-State.
   var DRAFT_KEY = "schichtprotokoll_draft_v1";
   function saveDraft() {
+    if (resetInProgress) return;
     try {
       var ta = document.getElementById("entryText");
       var text = ta ? ta.value : "";
@@ -2673,9 +2719,16 @@
     var list = state.placeholders || [];
     if (!list.length) { wrap.innerHTML = '<p class="category-empty">Noch keine Platzhalter.</p>'; return; }
     wrap.innerHTML = list.map(function (ph) {
-      var sub = (ph.options && ph.options.length)
-        ? ph.options.length + " Option(en): " + ph.options.slice(0, 3).join(", ") + (ph.options.length > 3 ? " …" : "")
-        : "Freitext (wird beim Einfügen zum Überschreiben markiert)";
+      var lname = (ph.name || "").toLowerCase();
+      var systemKind = (lname === "person" || lname === "personen" || lname === "name") ? "Person wird aus deinen Kontakten ausgewählt"
+        : (lname === "hashtag" || lname === "tag" || lname === "stichwort") ? "Hashtag wird aus bisherigen Hashtags ausgewählt"
+        : (lname === "zeitstempel" || lname === "zeit" || lname === "uhrzeit") ? "Datum und Uhrzeit werden automatisch eingesetzt"
+        : null;
+      var sub = systemKind
+        ? "System: " + systemKind
+        : (ph.options && ph.options.length)
+          ? ph.options.length + " Option(en): " + ph.options.slice(0, 3).join(", ") + (ph.options.length > 3 ? " …" : "")
+          : "Freitext (wird beim Einfügen zum Überschreiben markiert)";
       return '<div class="option-row"><div class="option-row__label">{' + esc(ph.name) + '}<span class="person-row__note">' + esc(sub) + '</span></div>' +
         '<button type="button" class="option-row__edit" data-edit-placeholder="' + ph.id + '" aria-label="Bearbeiten">✎</button></div>';
     }).join("");
@@ -2938,10 +2991,12 @@
     html += '<div class="involved"><div class="involved__label">Beteiligte Personen</div><div data-role="inv-rows"></div>' +
       '<div class="chip-row" data-role="inv-person-chips"></div></div>';
 
-    html += '<div class="involved"><div class="involved__label">Vorlagen</div><div class="chip-row" data-role="patient-template-chips"></div></div>';
-
     html += '<div class="involved"><div class="involved__label">Notiz (optional)</div>' +
       '<textarea class="entry-textarea" rows="3" placeholder="Zusätzliche Notiz …" data-role="patient-text">' + esc(patientUi.text) + '</textarea></div>';
+
+    html += '<div class="involved"><div class="involved__label">Hashtags</div><div class="chip-row" data-role="patient-hashtag-chips"></div></div>';
+
+    html += '<div class="involved"><div class="involved__label">Vorlagen</div><div class="chip-row" data-role="patient-template-chips"></div></div>';
 
     html += '<div class="involved"><div class="involved__label">Fotos (optional)</div><div class="entry-photos-row" data-role="photos-row"></div></div>';
 
@@ -3070,6 +3125,10 @@
         });
       });
     }
+
+    fillHashtagChips(root.querySelector('[data-role="patient-hashtag-chips"]'), function () {
+      return document.getElementById(targetId).querySelector('[data-role="patient-text"]');
+    });
 
     renderEntryPhotosUI(root, patientUi.photos, function () { renderPatientForm(targetId); });
 
@@ -4464,14 +4523,45 @@
     toast("Daten zusammengeführt");
   }
 
+  // Echter Voll-Reset: entfernt ALLE App-Schlüssel im Browser (Daten, Entwurf,
+  // Einführungs-Flag, PIN-Sperre), verwirft evtl. Caches und lädt die Seite
+  // frisch neu. Nur den Haupt-State zu überschreiben reichte nicht: Entwurf,
+  // "Einführung gesehen" und alles im Arbeitsspeicher (Textfeld, Modus,
+  // Patientenformular, Filter) blieben bestehen – die Einführung mit den
+  // neuen Texten und dem Demodaten-Button erschien deshalb nie wieder.
+  function resetEverything() {
+    resetInProgress = true; // persist()/saveDraft() schreiben ab jetzt nichts mehr
+    try {
+      var keys = [];
+      for (var i = 0; i < localStorage.length; i++) {
+        var k = localStorage.key(i);
+        if (k && k.indexOf("schichtprotokoll_") === 0) keys.push(k);
+      }
+      keys.forEach(function (k) { localStorage.removeItem(k); });
+    } catch (e) { /* ignore */ }
+    try { sessionStorage.clear(); } catch (e) { /* ignore */ }
+
+    var tasks = [];
+    try {
+      if (window.caches && caches.keys) {
+        tasks.push(caches.keys().then(function (ks) { return Promise.all(ks.map(function (k) { return caches.delete(k); })); }));
+      }
+      if (navigator.serviceWorker && navigator.serviceWorker.getRegistrations) {
+        tasks.push(navigator.serviceWorker.getRegistrations().then(function (rs) { return Promise.all(rs.map(function (r) { return r.unregister(); })); }));
+      }
+    } catch (e) { /* ignore */ }
+    Promise.all(tasks.map(function (t) { return t.catch(function () {}); })).then(function () {
+      // Neue URL (Query) umgeht einen gecachten index.html; init() räumt sie wieder auf.
+      location.replace(location.pathname + "?reset=" + Date.now());
+    });
+  }
+
   function clearAllData() {
-    confirmDialog("Wirklich alle Daten unwiderruflich löschen? Ein Export vorher wird empfohlen.", "Alles löschen", true).then(function (ok) {
-      if (!ok) return;
-      state = defaultState();
-      persist();
-      ui.selectedPersonIds = [];
-      refreshAllViews();
-      toast("Alle Daten gelöscht");
+    confirmDialog(
+      "Wirklich ALLES unwiderruflich löschen? Einträge, Kontakte, Patienten, Fotos, Vorlagen, Einstellungen, Entwurf und PIN-Sperre werden entfernt, die App startet danach wie neu mit der Einführung. Ein Export vorher wird empfohlen.",
+      "Alles löschen", true
+    ).then(function (ok) {
+      if (ok) resetEverything();
     });
   }
 

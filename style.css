@@ -712,7 +712,13 @@ main#views{
   transition: width .2s ease, background .2s ease;
 }
 .onboarding-dot.is-active{ width: 18px; background: var(--primary); }
-.onboarding-nav{ display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.onboarding-nav{
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  /* Bleibt bei langen Schritten (z. B. Datenschutz-Hinweis auf kleinen
+     Handys) am unteren Kartenrand sichtbar, statt aus dem Blick zu scrollen. */
+  position: sticky; bottom: 0; z-index: 1;
+  background: var(--surface); padding: 10px 0 12px;
+}
 .onboarding-nav .btn{ flex: 1; }
 
 /* ---------- App-Sperre (PIN) ---------- */

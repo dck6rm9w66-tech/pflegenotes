@@ -7,7 +7,7 @@
 <meta name="description" content="Schnelles Dokumentationstool für die Pflege – Situationen, Beteiligte, Kalender und Schichtfotos.">
 <meta name="theme-color" content="#0F5C56">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🩺</text></svg>">
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="style.css?v=2026.10.02-c">
 </head>
 <body>
 <div id="app">
@@ -46,6 +46,11 @@
           <textarea id="entryText" class="entry-textarea" placeholder="Was ist passiert? Kurz notieren …" rows="4"></textarea>
 
           <div class="involved">
+            <div class="involved__label">Hashtags</div>
+            <div id="hashtagChips" class="chip-row"></div>
+          </div>
+
+          <div class="involved">
             <div class="involved__label">Vorlagen</div>
             <div id="templateChips" class="chip-row"></div>
           </div>
@@ -58,11 +63,6 @@
           <div class="involved">
             <div class="involved__label">Beteiligt</div>
             <div id="personChips" class="chip-row"></div>
-          </div>
-
-          <div class="involved">
-            <div class="involved__label">Hashtags</div>
-            <div id="hashtagChips" class="chip-row"></div>
           </div>
 
           <div class="involved">
@@ -263,6 +263,7 @@
         <h2>Daten löschen</h2>
         <button id="clearAllBtn" class="btn btn--danger btn--block" type="button">Alle Daten unwiderruflich löschen</button>
       </section>
+      <p id="appVersion" class="settings-hint" style="text-align:center; margin-top:18px;"></p>
     </section>
 
   </main>
@@ -292,6 +293,6 @@
 </div>
 <div id="lockRoot"></div>
 
-<script src="app.js"></script>
+<script src="app.js?v=2026.10.02-c"></script>
 </body>
 </html>
